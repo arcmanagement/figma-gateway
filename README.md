@@ -66,12 +66,14 @@ The daemon routes requests by session key, file metadata, `editorType`, and `edi
 ## Install on macOS with Homebrew
 
 ```bash
+brew trust --formula arcmanagement/figma-gateway/figma-gateway
 brew tap arcmanagement/figma-gateway https://github.com/arcmanagement/figma-gateway.git
 brew install arcmanagement/figma-gateway/figma-gateway
 ```
 
 The public Figma Gateway repository is also the Homebrew tap; no separate tap
-repository is required. Installation generates the per-machine Plugin and
+repository is required. The Formula-level trust command is required before
+adding this custom-URL tap. Installation generates the per-machine Plugin and
 registers the daemon as a login service. Homebrew prints the manifest path to
 import into Figma once.
 

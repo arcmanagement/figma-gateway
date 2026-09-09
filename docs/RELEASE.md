@@ -52,6 +52,7 @@ the Formula update job succeeds, then run `brew style` and `brew audit
 Test the exact public repository as a custom-URL tap:
 
 ```bash
+brew trust --formula arcmanagement/figma-gateway/figma-gateway
 brew tap arcmanagement/figma-gateway https://github.com/arcmanagement/figma-gateway.git
 brew install arcmanagement/figma-gateway/figma-gateway
 ```
