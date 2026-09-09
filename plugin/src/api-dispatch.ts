@@ -1,6 +1,6 @@
 import { toSerializable } from "./serialize";
 
-type PluginApiAction = "get" | "call" | "set" | "callback";
+type PluginApiAction = "get" | "call" | "set" | "indexGet" | "indexSet" | "globalGet" | "callback" | "callbackEvents";
 type PluginApiPayload = {
   action: PluginApiAction;
   path?: string;
@@ -8,6 +8,9 @@ type PluginApiPayload = {
   value?: unknown;
   target?: unknown;
   code?: string;
+  returnValue?: unknown;
+  callbackHandle?: string;
+  clear?: boolean;
 };
 
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
@@ -53,8 +56,12 @@ export class PluginApiDispatcher {
   private readonly handles = new Map<string, unknown>();
   private readonly handleIds = new WeakMap<object, string>();
   private nextHandle = 1;
+  private readonly callbackEvents = new Map<string, unknown[][]>();
 
-  constructor(private readonly root: PluginAPI) {}
+  constructor(
+    private readonly root: PluginAPI,
+    private readonly globals: Record<string, unknown> = {},
+  ) {}
 
   private remember(value: object): string {
     const existing = this.handleIds.get(value);
@@ -120,6 +127,7 @@ export class PluginApiDispatcher {
     if (keys.length === 1 && typeof record.$base64 === "string") {
       return this.root.base64Decode(record.$base64);
     }
+    if (keys.length === 1 && record.$undefined === true) return undefined;
     const resolved: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(record)) resolved[key] = await this.resolveValue(item);
     return resolved;
@@ -127,17 +135,46 @@ export class PluginApiDispatcher {
 
   async dispatch(payload: PluginApiPayload): Promise<unknown> {
     if (payload.action === "callback") {
-      const code = String(payload.code || "");
-      if (!code.trim()) throw new Error("Callback code is required");
-      const factory = new Function(
-        "figma", "event", "args", "serialize", `"use strict";\n${code}`,
-      ) as (figmaApi: PluginAPI, event: unknown, args: unknown[], serialize: typeof toSerializable) => unknown;
-      const callback = (...args: unknown[]) => factory(this.root, args[0], args, toSerializable);
-      return this.serialize(callback);
+      let callback: (...args: unknown[]) => unknown;
+      if (payload.code) {
+        const factory = new Function(
+          "figma", "event", "args", "serialize", `"use strict";\n${payload.code}`,
+        ) as (figmaApi: PluginAPI, event: unknown, args: unknown[], serialize: typeof toSerializable) => unknown;
+        callback = (...args: unknown[]) => factory(this.root, args[0], args, toSerializable);
+      } else {
+        callback = (...args: unknown[]) => {
+          const id = this.handleIds.get(callback);
+          if (id) this.callbackEvents.get(id)?.push(args);
+          return payload.returnValue;
+        };
+      }
+      const serialized = this.serialize(callback) as { $handle: string };
+      this.callbackEvents.set(serialized.$handle, []);
+      return serialized;
+    }
+    if (payload.action === "callbackEvents") {
+      const id = String(payload.callbackHandle || "");
+      if (!this.handles.has(id) || !this.callbackEvents.has(id)) throw new Error(`Unknown callback handle: ${id}`);
+      const events = this.callbackEvents.get(id)!;
+      const result = events.map((args) => this.serialize(args));
+      if (payload.clear !== false) events.length = 0;
+      return result;
     }
 
     const path = String(payload.path || "");
+    if (payload.action === "globalGet") return this.serialize(resolvePath(this.globals, path));
     const target = payload.target === undefined ? this.root : await this.resolveValue(payload.target);
+    if (payload.action === "indexGet" || payload.action === "indexSet") {
+      if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+        throw new Error("Plugin API index target is not an object");
+      }
+      const key = String(payload.path || "");
+      if (!key || BLOCKED_SEGMENTS.has(key)) throw new Error("Plugin API index key is missing or forbidden");
+      const record = target as Record<string, unknown>;
+      if (payload.action === "indexGet") return this.serialize(record[key]);
+      record[key] = await this.resolveValue(payload.value);
+      return this.serialize(record[key]);
+    }
     if (payload.action === "get") return this.serialize(resolvePath(target, path));
 
     const { owner, key } = resolveOwner(target, path);

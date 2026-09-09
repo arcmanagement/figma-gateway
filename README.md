@@ -180,40 +180,39 @@ Select a connected session before using the Plugin API:
 ```bash
 figma-gateway plugin node SESSION_KEY 2429:67732 --depth 1
 
-# Read any Plugin API property.
-figma-gateway plugin api get SESSION_KEY editorType
-figma-gateway plugin api get SESSION_KEY currentPage.selection
+# Search the generated one-to-one command catalog and inspect exact parameters.
+figma-gateway plugin api list --search variable
+figma-gateway plugin api describe figma.variables.create-variable
 
-# Call any Plugin API method. Arguments are a JSON array.
-figma-gateway plugin api call SESSION_KEY getNodeByIdAsync \
-  --args '["2429:67732"]' --confirm
-
-# Pass live Plugin objects without JavaScript.
-figma-gateway plugin api call SESSION_KEY group \
-  --args '[[{"$node":"1:2"},{"$node":"1:3"}],{"$figma":"currentPage"}]' \
+# Every root API and namespace API has its own command ID and named parameters.
+figma-gateway plugin api figma.editor-type SESSION_KEY
+figma-gateway plugin api figma.get-node-by-id-async SESSION_KEY \
+  --params '{"id":"2429:67732"}' --confirm
+figma-gateway plugin api figma.variables.create-variable SESSION_KEY \
+  --params '{"name":"Spacing","collectionId":"VariableCollectionId:1:2","resolvedType":"FLOAT"}' \
   --confirm
 
-# Set any property writable in the connected editor and mode.
-figma-gateway plugin api set SESSION_KEY currentPage.selection \
-  --value '[{"$node":"1:2"}]' --confirm
-
-# Call a method directly on a node resolved inside Figma.
-figma-gateway plugin api call SESSION_KEY resize \
-  --target '{"$node":"1:2"}' --args '[320,240]' --confirm
-
-# API objects returned by a call include an opaque $handle. Reuse it in later calls.
-figma-gateway plugin api call SESSION_KEY variables.getVariableByIdAsync \
-  --args '["VariableID:1:2"]' --confirm
-figma-gateway plugin api call SESSION_KEY setValueForMode \
-  --target '{"$handle":"h1"}' --args '["mode-id",8]' --confirm
-
-# Create a persistent callback, then pass its handle to an event API.
-figma-gateway plugin api callback SESSION_KEY \
-  --code 'return [{title:"JSON",language:"JSON",code:JSON.stringify(serialize(event))}]' \
+# Live Plugin objects are explicit values; no JavaScript is evaluated.
+figma-gateway plugin api figma.group SESSION_KEY \
+  --params '{"nodes":[{"$node":"1:2"},{"$node":"1:3"}],"parent":{"$figma":"currentPage"}}' \
   --confirm
-figma-gateway plugin api call SESSION_KEY codegen.on \
-  --args '["generate",{"$handle":"h2"}]' --confirm
 
+# Returned host objects include a session-scoped $handle. Use the command for
+# that exact interface to read, call, or write its members.
+figma-gateway plugin api figma.current-page SESSION_KEY
+figma-gateway plugin api page-node.selection SESSION_KEY \
+  --target '{"$handle":"h1"}' --value '[{"$node":"1:2"}]' --confirm
+figma-gateway plugin api layout-mixin.resize SESSION_KEY \
+  --target '{"$node":"1:2"}' --params '{"width":320,"height":240}' --confirm
+
+# Event and predicate APIs accept code-free persistent callbacks.
+figma-gateway plugin callback create SESSION_KEY --return '[]'
+figma-gateway plugin api figma.codegen.on SESSION_KEY \
+  --params '{"type":"generate","callback":{"$handle":"h2"}}' --overload 1 --confirm
+figma-gateway plugin callback events SESSION_KEY h2
+
+# Arbitrary execution remains available as an explicit escape hatch, but the
+# generated Plugin API commands above do not depend on it.
 figma-gateway plugin exec SESSION_KEY \
   --code 'return { page: figma.currentPage.name, selection: figma.currentPage.selection.map(node => node.id) }' \
   --confirm
@@ -225,13 +224,22 @@ figma-gateway plugin export SESSION_KEY 2429:67732 out/animation.mp4 \
   --format MP4 --scale 1 --fps 30 --quality HIGH
 ```
 
+The command catalog is generated from the pinned official
+`@figma/plugin-typings` package. It currently contains 1,231 unique commands
+covering all 1,268 method, property, overload, index, and documented global
+declarations across 252 interfaces plus `__html__` and `__uiFiles__`.
+`npm run verify:plugin-api` fails when the typings and the
+committed catalog differ, and the test suite independently proves that every
+declaration is represented.
+
 Plugin API method calls and writes, arbitrary plugin code, and non-GET REST
-requests require explicit confirmation. `plugin api` values support
-`--target` and argument values support `{"$handle":"HANDLE"}` for any live
-object or callback returned by the Plugin, `{"$node":"NODE_ID"}`,
-`{"$figma":"PATH"}`, and `{"$base64":"ENCODED_BYTES"}` references. Handles
-belong to one running Plugin session and expire when that session ends. Dev Mode remains read-only for
-document contents because Figma enforces that boundary.
+requests require explicit confirmation. Named `--params` are ordered according
+to the selected official overload; use `--overload N` when overload parameter
+names overlap. Values support `{"$handle":"HANDLE"}` for live objects and
+callbacks, `{"$node":"NODE_ID"}`, `{"$figma":"PATH"}`, and
+`{"$base64":"ENCODED_BYTES"}`. Handles belong to one running Plugin session
+and expire when that session ends. Dev Mode remains read-only for document
+contents because Figma enforces that boundary.
 
 ## Logs and telemetry
 
@@ -298,10 +306,12 @@ Large responses can be saved under the caller's working directory with `--save`.
 | `get_node` | Serialize a node recursively |
 | `save_screenshots` | Export PNG, JPG, SVG, PDF, MP4, GIF, or WebM files |
 | `execute_plugin_code` | Execute explicitly confirmed JavaScript against the local Plugin API session |
-| `plugin_api_get` | Read any serializable Plugin API property by path |
-| `plugin_api_call` | Call any Plugin API method by path with JSON and live-object references |
-| `plugin_api_set` | Set any writable Plugin API property by path |
-| `plugin_api_callback` | Create a reusable callback handle for event-based Plugin APIs |
+| `plugin_api_list` | List exact command IDs generated from the pinned official typings |
+| `plugin_api_describe` | Show one command's interface, types, and overload parameters |
+| `plugin_api_invoke` | Invoke a cataloged API command without evaluating JavaScript |
+| `plugin_callback_create` | Create a code-free callback with a fixed JSON return value |
+| `plugin_callback_events` | Read and optionally retain the callback's recorded calls |
+| `plugin_api_get`, `plugin_api_call`, `plugin_api_set`, `plugin_api_callback` | Legacy raw-path compatibility tools |
 | `figma_rest_request` | Call an official REST `/v1` or `/v2` endpoint |
 | `figma_auth_status` | Report credential configuration without exposing values |
 | `get_comments` | Retrieve file comments and optionally select one comment |

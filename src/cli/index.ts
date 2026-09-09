@@ -11,6 +11,16 @@ import { ensureGatewaySecret } from "./secret-store.js";
 import { GatewayHub } from "../server/gateway.js";
 import { credentialStatus, figmaRestRequest, type RestRequest } from "../server/rest.js";
 import { focusFigmaWindow, listFigmaWindows } from "./windows.js";
+import {
+  listPluginApiEntries,
+  pluginApiEntry,
+  resolvePluginApiInvocation,
+  PLUGIN_API_COMMAND_COUNT,
+  PLUGIN_API_DECLARATION_COUNT,
+  PLUGIN_API_INTERFACE_COUNT,
+  PLUGIN_API_GLOBAL_COUNT,
+  PLUGIN_API_TYPINGS_VERSION,
+} from "../shared/plugin-api-catalog.js";
 
 type Writer = (value: string) => void;
 type Parsed = { positionals: string[]; options: Map<string, string | true> };
@@ -31,10 +41,12 @@ Usage:
   figma-gateway [global options] plugin start [--url FIGMA_URL] [--window FILE_NAME] [--mode auto|design|dev|figjam|slides|buzz|motion] [--reload]
   figma-gateway [global options] plugin files [--editor-type TYPE]
   figma-gateway [global options] plugin node <session-key> <node-id> [--depth N]
-  figma-gateway [global options] plugin api get <session-key> <path> [--target JSON|@FILE]
-  figma-gateway [global options] plugin api call <session-key> <path> [--target JSON|@FILE] [--args JSON|@FILE] --confirm
-  figma-gateway [global options] plugin api set <session-key> <path> [--target JSON|@FILE] --value JSON|@FILE --confirm
-  figma-gateway [global options] plugin api callback <session-key> (--code JS | --code-file PATH) --confirm
+  figma-gateway [global options] plugin api list [--interface NAME] [--search TEXT]
+  figma-gateway [global options] plugin api describe <api-id>
+  figma-gateway [global options] plugin api <api-id> <session-key> [--params JSON|@FILE] [--target JSON|@FILE] [--value JSON|@FILE] [--key KEY] [--overload N] [--confirm]
+  figma-gateway [global options] plugin callback create <session-key> [--return JSON|@FILE]
+  figma-gateway [global options] plugin callback events <session-key> <handle> [--keep]
+  figma-gateway [global options] plugin api get|call|set|callback ... (legacy raw path access)
   figma-gateway [global options] plugin exec <session-key> (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin exec-many <session-key>... (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin export <session-key> <node-id> <output> [--format PNG|JPG|SVG|PDF|MP4|GIF|WEBM] [--scale N] [--fps N] [--quality LEVEL] [--loop-count N]
@@ -82,7 +94,7 @@ function parse(argv: string[]): Parsed {
       positionals.push(value);
       continue;
     }
-    if (["--confirm", "--reload"].includes(value)) {
+    if (["--confirm", "--reload", "--keep"].includes(value)) {
       options.set(value, true);
       continue;
     }
@@ -262,8 +274,75 @@ async function runPlugin(
   }
   if (action === "api") {
     const [apiAction, fileKey, apiPath] = parsed.positionals;
-    if (!apiAction || !["get", "call", "set", "callback"].includes(apiAction)) {
-      throw new Error("plugin api requires get, call, set, or callback");
+    if (!apiAction) throw new Error("plugin api requires a command ID, list, or describe");
+    if (apiAction === "list") {
+      const interfaceName = parsed.options.get("--interface");
+      const search = parsed.options.get("--search");
+      const commands = listPluginApiEntries({
+        ...(typeof interfaceName === "string" ? { interface: interfaceName } : {}),
+        ...(typeof search === "string" ? { search } : {}),
+      });
+      return output(writer, {
+        typingsVersion: PLUGIN_API_TYPINGS_VERSION,
+        interfaceCount: PLUGIN_API_INTERFACE_COUNT,
+        globalCount: PLUGIN_API_GLOBAL_COUNT,
+        declarationCount: PLUGIN_API_DECLARATION_COUNT,
+        commandCount: PLUGIN_API_COMMAND_COUNT,
+        matched: commands.length,
+        commands: commands.map(({ id, interface: owner, kind, readonly, targetRequired }) => ({
+          id, interface: owner, kind, readonly, targetRequired,
+        })),
+      });
+    }
+    if (apiAction === "describe") {
+      if (!fileKey) throw new Error("plugin api describe requires an API command ID");
+      return output(writer, pluginApiEntry(fileKey));
+    }
+    if (!["get", "call", "set", "callback"].includes(apiAction)) {
+      const apiId = apiAction;
+      const sessionKey = fileKey;
+      if (!sessionKey) throw new Error(`plugin api ${apiId} requires a session key`);
+      if (parsed.options.has("--params") && parsed.options.has("--args")) {
+        throw new Error(`${apiId} accepts either --params or --args, not both`);
+      }
+      const params = parsed.options.has("--params")
+        ? await jsonArgument(parsed.options.get("--params"), "--params")
+        : undefined;
+      const args = parsed.options.has("--args")
+        ? await jsonArgument(parsed.options.get("--args"), "--args")
+        : undefined;
+      const target = parsed.options.has("--target")
+        ? await jsonArgument(parsed.options.get("--target"), "--target")
+        : undefined;
+      const hasValue = parsed.options.has("--value");
+      const value = hasValue ? await jsonArgument(parsed.options.get("--value"), "--value") : undefined;
+      const overloadValue = parsed.options.get("--overload");
+      const overload = typeof overloadValue === "string" ? Number(overloadValue) : undefined;
+      const key = parsed.options.get("--key");
+      const invocationInput = {
+        apiId,
+        params,
+        args,
+        target,
+        value,
+        hasValue,
+        key: typeof key === "string" ? key : undefined,
+        overload,
+        confirm: parsed.options.has("--confirm"),
+      };
+      resolvePluginApiInvocation(invocationInput);
+      const rpcArgs: Record<string, unknown> = {
+        fileKey: sessionKey,
+        apiId,
+        ...(params === undefined ? {} : { params }),
+        ...(args === undefined ? {} : { args }),
+        ...(target === undefined ? {} : { target }),
+        ...(hasValue ? { value } : {}),
+        ...(typeof key === "string" ? { key } : {}),
+        ...(overload === undefined ? {} : { overload }),
+        ...(parsed.options.has("--confirm") ? { confirm: true } : {}),
+      };
+      return output(writer, await pluginRpc(profile, "plugin_api_invoke", rpcArgs));
     }
     if (!fileKey) throw new Error(`plugin api ${apiAction} requires a session key`);
     if (apiAction === "callback") {
@@ -300,6 +379,28 @@ async function runPlugin(
     const value = await jsonArgument(parsed.options.get("--value"), "--value");
     return output(writer, await pluginRpc(profile, "plugin_api_set", {
       fileKey, path: apiPath, value, target, confirm: true,
+    }));
+  }
+  if (action === "callback") {
+    const [callbackAction, sessionKey, callbackHandle] = parsed.positionals;
+    if (!callbackAction || !["create", "events"].includes(callbackAction)) {
+      throw new Error("plugin callback requires create or events");
+    }
+    if (!sessionKey) throw new Error(`plugin callback ${callbackAction} requires a session key`);
+    if (callbackAction === "create") {
+      const returnValue = parsed.options.has("--return")
+        ? await jsonArgument(parsed.options.get("--return"), "--return")
+        : undefined;
+      return output(writer, await pluginRpc(profile, "plugin_callback_create", {
+        fileKey: sessionKey,
+        ...(returnValue === undefined ? {} : { returnValue }),
+      }));
+    }
+    if (!callbackHandle) throw new Error("plugin callback events requires a callback handle");
+    return output(writer, await pluginRpc(profile, "plugin_callback_events", {
+      fileKey: sessionKey,
+      callbackHandle,
+      clear: !parsed.options.has("--keep"),
     }));
   }
   const fileKey = parsed.positionals[0];

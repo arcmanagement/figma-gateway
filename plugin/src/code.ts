@@ -12,7 +12,7 @@ type IncomingRequest = {
 };
 
 const sessionKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const pluginApi = new PluginApiDispatcher(figma);
+const pluginApi = new PluginApiDispatcher(figma, { __html__, __uiFiles__ });
 
 figma.showUI(__html__, { width: 320, height: 120 });
 
@@ -131,12 +131,15 @@ figma.ui.onmessage = async (message: IncomingRequest) => {
     else if (message.operation === "execute") result = await execute(message.payload);
     else if (message.operation === "api") {
       result = await pluginApi.dispatch(message.payload as {
-        action: "get" | "call" | "set" | "callback";
+        action: "get" | "call" | "set" | "indexGet" | "indexSet" | "globalGet" | "callback" | "callbackEvents";
         path?: string;
         args?: unknown[];
         value?: unknown;
         target?: unknown;
         code?: string;
+        returnValue?: unknown;
+        callbackHandle?: string;
+        clear?: boolean;
       });
     }
     else throw new Error(`Unsupported operation: ${String(message.operation)}`);

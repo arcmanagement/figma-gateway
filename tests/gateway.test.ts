@@ -132,6 +132,46 @@ test("routes typed Plugin API operations and requires confirmation for calls and
   await hub.close();
 });
 
+test("routes exact catalog commands without accepting an arbitrary API path", async () => {
+  const port = await freePort();
+  const hub = new GatewayHub(port, "shared-secret", silentAudit);
+  assert.equal(await hub.start(), true);
+  const socket = await connectedPlugin(port, "shared-secret");
+  const requests: Array<{ operation: string; payload: Record<string, unknown> }> = [];
+  socket.on("message", (data) => {
+    const request = JSON.parse(data.toString());
+    requests.push(request);
+    socket.send(JSON.stringify({ type: "response", id: request.id, ok: true, result: "ok" }));
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  await assert.rejects(hub.call("plugin_api_invoke", {
+    fileKey: "session-1", apiId: "figma.not-a-real-api", confirm: true,
+  }), /Unknown Plugin API command/);
+  await assert.rejects(hub.call("plugin_api_invoke", {
+    fileKey: "session-1", apiId: "figma.create-rectangle",
+  }), /requires --confirm/);
+  assert.equal(await hub.call("plugin_api_invoke", {
+    fileKey: "session-1",
+    apiId: "figma.variables.create-variable",
+    params: { name: "Spacing", collectionId: "VariableCollectionId:1:2", resolvedType: "FLOAT" },
+    confirm: true,
+  }), "ok");
+  assert.deepEqual(requests[0], {
+    type: "request",
+    id: requests[0]?.id,
+    operation: "api",
+    payload: {
+      action: "call",
+      path: "variables.createVariable",
+      args: ["Spacing", "VariableCollectionId:1:2", "FLOAT"],
+    },
+  });
+
+  socket.close();
+  await hub.close();
+});
+
 test("follower RPC requires and forwards the shared secret", async () => {
   const port = await freePort();
   const leader = new GatewayHub(port, "secret", silentAudit);

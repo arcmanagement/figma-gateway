@@ -58,4 +58,7 @@ export const PLUGIN_TOOLS = new Set([
   "plugin_api_call",
   "plugin_api_set",
   "plugin_api_callback",
+  "plugin_api_invoke",
+  "plugin_callback_create",
+  "plugin_callback_events",
 ]);

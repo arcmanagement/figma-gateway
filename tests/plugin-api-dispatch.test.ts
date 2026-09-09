@@ -123,3 +123,30 @@ test("Plugin API handles stay valid for the lifetime of a large session result",
     path: "id",
   }), 0);
 });
+
+test("Plugin API creates code-free callbacks and returns their recorded events", async () => {
+  const dispatcher = new PluginApiDispatcher(pluginApi());
+  const callback = await dispatcher.dispatch({
+    action: "callback",
+    returnValue: [{ title: "Gateway", language: "JSON", code: "{}" }],
+  }) as Record<string, unknown>;
+  const returned = await dispatcher.dispatch({
+    action: "call",
+    target: { $handle: callback.$handle },
+    path: "call",
+    args: [null, { node: { id: "1:2" } }],
+  });
+  assert.deepEqual(
+    (returned as Array<Record<string, unknown>>).map(({ $handle: _handle, ...value }) => value),
+    [{ title: "Gateway", language: "JSON", code: "{}" }],
+  );
+  const events = await dispatcher.dispatch({
+    action: "callbackEvents",
+    callbackHandle: String(callback.$handle),
+  }) as Array<unknown>;
+  assert.equal(events.length, 1);
+  assert.deepEqual(await dispatcher.dispatch({
+    action: "callbackEvents",
+    callbackHandle: String(callback.$handle),
+  }), []);
+});
