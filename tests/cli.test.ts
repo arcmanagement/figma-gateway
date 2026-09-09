@@ -94,7 +94,11 @@ test("CLI requires explicit confirmation for arbitrary Plugin execution", async 
 
 test("CLI rejects a non-Figma URL before starting the Plugin", async () => {
   await assert.rejects(
-    runCli(["--profile", "client-a", "plugin", "start", "--url", "https://example.com/file"]),
+    runCli(
+      ["--profile", "client-a", "plugin", "start", "--url", "https://example.com/file"],
+      () => undefined,
+      { platform: "darwin" },
+    ),
     /must be an https:\/\/figma\.com URL/,
   );
 });
@@ -115,7 +119,7 @@ test("CLI URL launcher requires a new session on the shared gateway port", async
   await runCli([
     "--profile", "example", "--port", "1995", "plugin", "start", "--url",
     "https://www.figma.com/design/abcdefghijklmnopqrstuv/My%20File?node-id=1-2",
-  ], () => undefined, { spawnSync: fakeSpawn });
+  ], () => undefined, { spawnSync: fakeSpawn, platform: "darwin" });
 
   const launcher = calls.find((call) => call.command === "bash");
   const open = calls.find((call) => call.command === "open");
@@ -145,7 +149,7 @@ test("CLI starts the unified Plugin and waits for a dev session", async (context
   await runCli([
     "--profile", "local", "plugin", "start",
     "--mode", "dev", "--window", "Product Workspace",
-  ], () => undefined, { spawnSync: fakeSpawn });
+  ], () => undefined, { spawnSync: fakeSpawn, platform: "darwin" });
 
   const launcher = calls.find((call) => call.command === "bash");
   assert.equal(launcher?.env?.FIGMA_TARGET_INSTANCE, "shared");
@@ -221,14 +225,14 @@ test("CLI lists and focuses Figma Desktop windows", async () => {
   let listed = "";
   await runCli([
     "--profile", "example", "plugin", "windows",
-  ], (value) => { listed += value; }, { spawnSync: fakeSpawn });
+  ], (value) => { listed += value; }, { spawnSync: fakeSpawn, platform: "darwin" });
   assert.equal(JSON.parse(listed).app, "/Applications/Figma.app");
   assert.deepEqual(JSON.parse(listed).windows, ["Icon Master", "Product_v1_ScreenDesign"]);
 
   let focused = "";
   await runCli([
     "--profile", "example", "plugin", "focus", "Product_v1_ScreenDesign",
-  ], (value) => { focused += value; }, { spawnSync: fakeSpawn });
+  ], (value) => { focused += value; }, { spawnSync: fakeSpawn, platform: "darwin" });
   assert.equal(JSON.parse(focused).app, "/Applications/Figma.app");
   assert.equal(JSON.parse(focused).window, "Product_v1_ScreenDesign");
   assert.equal(calls.filter((call) => call.command === "osascript").length, 2);

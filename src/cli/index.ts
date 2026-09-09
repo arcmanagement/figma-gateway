@@ -160,6 +160,7 @@ async function runPlugin(
   argv: string[],
   writer: Writer,
   spawn: typeof spawnSync = spawnSync,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
   const action = argv[0];
   const parsed = parse(argv.slice(1));
@@ -167,17 +168,17 @@ async function runPlugin(
     return output(writer, { ok: true, manifest: buildLocalPlugin(profile), manualImportRequired: true });
   }
   if (action === "windows") {
-    if (process.platform !== "darwin") throw new Error("Figma window listing is supported on macOS only");
+    if (platform !== "darwin") throw new Error("Figma window listing is supported on macOS only");
     return output(writer, { app: profile.app, windows: listFigmaWindows(profile.app, spawn) });
   }
   if (action === "focus") {
-    if (process.platform !== "darwin") throw new Error("Figma window focus is supported on macOS only");
+    if (platform !== "darwin") throw new Error("Figma window focus is supported on macOS only");
     const fileName = parsed.positionals.join(" ");
     focusFigmaWindow(profile.app, fileName, spawn);
     return output(writer, { ok: true, app: profile.app, window: fileName });
   }
   if (action === "start") {
-    if (process.platform !== "darwin") {
+    if (platform !== "darwin") {
       throw new Error("Automatic Plugin start is supported on macOS only. Start Figma Gateway from Plugins > Development.");
     }
     const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -403,7 +404,11 @@ async function runAuth(
 export async function runCli(
   argv: string[],
   writer: Writer = (value) => process.stdout.write(value),
-  dependencies: { spawnSync?: typeof spawnSync; daemonService?: DaemonServiceDependencies } = {},
+  dependencies: {
+    spawnSync?: typeof spawnSync;
+    daemonService?: DaemonServiceDependencies;
+    platform?: NodeJS.Platform;
+  } = {},
 ): Promise<void> {
   const { options: global, remaining } = parseGlobal(argv);
   const command = remaining[0];
@@ -455,7 +460,9 @@ export async function runCli(
       spawn: dependencies.daemonService?.spawn || dependencies.spawnSync,
     });
   }
-  if (command === "plugin") return runPlugin(profile, remaining.slice(1), writer, dependencies.spawnSync);
+  if (command === "plugin") {
+    return runPlugin(profile, remaining.slice(1), writer, dependencies.spawnSync, dependencies.platform);
+  }
   if (command === "rest") return runRest(profile, remaining.slice(1), writer);
   throw new Error(`Unknown command: ${command}`);
 }
