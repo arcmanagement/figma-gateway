@@ -31,6 +31,10 @@ Usage:
   figma-gateway [global options] plugin start [--url FIGMA_URL] [--window FILE_NAME] [--mode auto|design|dev|figjam|slides|buzz|motion] [--reload]
   figma-gateway [global options] plugin files [--editor-type TYPE]
   figma-gateway [global options] plugin node <session-key> <node-id> [--depth N]
+  figma-gateway [global options] plugin api get <session-key> <path> [--target JSON|@FILE]
+  figma-gateway [global options] plugin api call <session-key> <path> [--target JSON|@FILE] [--args JSON|@FILE] --confirm
+  figma-gateway [global options] plugin api set <session-key> <path> [--target JSON|@FILE] --value JSON|@FILE --confirm
+  figma-gateway [global options] plugin api callback <session-key> (--code JS | --code-file PATH) --confirm
   figma-gateway [global options] plugin exec <session-key> (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin exec-many <session-key>... (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin export <session-key> <node-id> <output> [--format PNG|JPG|SVG|PDF|MP4|GIF|WEBM] [--scale N] [--fps N] [--quality LEVEL] [--loop-count N]
@@ -165,7 +169,7 @@ async function runPlugin(
   const action = argv[0];
   const parsed = parse(argv.slice(1));
   if (action === "build") {
-    return output(writer, { ok: true, manifest: buildLocalPlugin(profile), manualImportRequired: true });
+    return output(writer, { ok: true, ...buildLocalPlugin(profile), manualImportRequired: true });
   }
   if (action === "windows") {
     if (platform !== "darwin") throw new Error("Figma window listing is supported on macOS only");
@@ -255,6 +259,48 @@ async function runPlugin(
       health.files = (health.files || []).filter((file) => file.editorType === editorType);
     }
     return output(writer, publicPluginHealth(health));
+  }
+  if (action === "api") {
+    const [apiAction, fileKey, apiPath] = parsed.positionals;
+    if (!apiAction || !["get", "call", "set", "callback"].includes(apiAction)) {
+      throw new Error("plugin api requires get, call, set, or callback");
+    }
+    if (!fileKey) throw new Error(`plugin api ${apiAction} requires a session key`);
+    if (apiAction === "callback") {
+      if (!parsed.options.has("--confirm")) throw new Error("plugin api callback requires --confirm");
+      const codeValue = parsed.options.get("--code");
+      const codeFile = parsed.options.get("--code-file");
+      if ((typeof codeValue === "string") === (typeof codeFile === "string")) {
+        throw new Error("plugin api callback requires exactly one of --code or --code-file");
+      }
+      const code = typeof codeValue === "string" ? codeValue : await readFile(String(codeFile), "utf8");
+      return output(writer, await pluginRpc(profile, "plugin_api_callback", {
+        fileKey, code, confirm: true,
+      }));
+    }
+    if (!apiPath) throw new Error(`plugin api ${apiAction} requires a session key and API path`);
+    const target = parsed.options.has("--target")
+      ? await jsonArgument(parsed.options.get("--target"), "--target")
+      : undefined;
+    if (apiAction === "get") {
+      return output(writer, await pluginRpc(profile, "plugin_api_get", {
+        fileKey, path: apiPath, ...(target === undefined ? {} : { target }),
+      }));
+    }
+    if (!parsed.options.has("--confirm")) throw new Error(`plugin api ${apiAction} requires --confirm`);
+    if (apiAction === "call") {
+      const args = parsed.options.has("--args")
+        ? await jsonArgument(parsed.options.get("--args"), "--args")
+        : [];
+      if (!Array.isArray(args)) throw new Error("--args must be a JSON array");
+      return output(writer, await pluginRpc(profile, "plugin_api_call", {
+        fileKey, path: apiPath, args, target, confirm: true,
+      }));
+    }
+    const value = await jsonArgument(parsed.options.get("--value"), "--value");
+    return output(writer, await pluginRpc(profile, "plugin_api_set", {
+      fileKey, path: apiPath, value, target, confirm: true,
+    }));
   }
   const fileKey = parsed.positionals[0];
   if (!fileKey) throw new Error(`${action || "plugin command"} requires a session key`);
@@ -438,7 +484,7 @@ export async function runCli(
     return;
   }
   if (command === "setup") {
-    const manifest = buildLocalPlugin(profile);
+    const manifests = buildLocalPlugin(profile);
     let daemonText = "";
     await runDaemonService(profile, ["install"], (value) => { daemonText += value; }, {
       ...dependencies.daemonService,
@@ -446,7 +492,7 @@ export async function runCli(
     });
     output(writer, {
       ok: true,
-      manifest,
+      ...manifests,
       manualImportRequired: true,
       daemon: JSON.parse(daemonText),
     });

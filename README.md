@@ -81,12 +81,13 @@ import into Figma once.
 
 Download the x64 or ARM64 installer for your machine from
 [GitHub Releases](https://github.com/arcmanagement/figma-gateway/releases/latest)
-and run it. WinGet distribution is not provided. The v1.0.0 installers are not
+and run it. WinGet distribution is not provided. The installers are not
 code-signed, so Windows may show an unknown-publisher warning.
 
 The installer generates the per-machine Plugin and registers a per-user login
-task with automatic restart. Import
-`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.json` into Figma once. Both x64
+task with automatic restart. Import both
+`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.json` and
+`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.dev.json` into Figma once. Both x64
 and ARM64 installers are published. Each installer includes the matching
 Node.js runtime and its license, so a separate Node.js installation is not
 required.
@@ -131,9 +132,20 @@ figma-gateway daemon start
 figma-gateway daemon uninstall --confirm
 ```
 
-## Build and register the local plugin
+## Build and register the local plugins
 
-The single development manifest supports Figma Design, FigJam, Figma Slides, Dev Mode inspection, Figma Buzz, and Motion in Figma Design.
+Figma Gateway has one product identity, runtime, daemon, and CLI. Its local
+build emits two registrations because Figma does not allow `figjam` and `dev`
+in the same manifest:
+
+- `manifest.json`: Figma Design, FigJam, Slides, Buzz, Motion, and text review
+- `manifest.dev.json`: Dev Mode inspect, Codegen, and Figma for VS Code
+
+Both registrations connect to the same `shared` gateway instance. The manifests
+enable every public permission and capability that Figma exposes to local
+development plugins, plus proposed and private-plugin APIs. Figma partner-only
+APIs, account permissions, plan restrictions, and each editor's read/write
+rules still apply.
 
 Generate or refresh the per-machine Plugin:
 
@@ -141,9 +153,9 @@ Generate or refresh the per-machine Plugin:
 figma-gateway plugin build
 ```
 
-The command returns a manifest path under the current user's application data
-directory. In Figma Desktop, choose Plugins > Development > Import plugin from
-manifest..., then select that file. This is a one-time manual registration.
+The command returns both manifest paths under the current user's application
+data directory. In Figma Desktop, choose Plugins > Development > Import plugin
+from manifest..., then select each file. This is a one-time manual registration.
 Run Plugins > Development > Figma Gateway in each file that should connect.
 
 Automatic Plugin startup and Figma window control are macOS-only. On Windows,
@@ -168,6 +180,40 @@ Select a connected session before using the Plugin API:
 ```bash
 figma-gateway plugin node SESSION_KEY 2429:67732 --depth 1
 
+# Read any Plugin API property.
+figma-gateway plugin api get SESSION_KEY editorType
+figma-gateway plugin api get SESSION_KEY currentPage.selection
+
+# Call any Plugin API method. Arguments are a JSON array.
+figma-gateway plugin api call SESSION_KEY getNodeByIdAsync \
+  --args '["2429:67732"]' --confirm
+
+# Pass live Plugin objects without JavaScript.
+figma-gateway plugin api call SESSION_KEY group \
+  --args '[[{"$node":"1:2"},{"$node":"1:3"}],{"$figma":"currentPage"}]' \
+  --confirm
+
+# Set any property writable in the connected editor and mode.
+figma-gateway plugin api set SESSION_KEY currentPage.selection \
+  --value '[{"$node":"1:2"}]' --confirm
+
+# Call a method directly on a node resolved inside Figma.
+figma-gateway plugin api call SESSION_KEY resize \
+  --target '{"$node":"1:2"}' --args '[320,240]' --confirm
+
+# API objects returned by a call include an opaque $handle. Reuse it in later calls.
+figma-gateway plugin api call SESSION_KEY variables.getVariableByIdAsync \
+  --args '["VariableID:1:2"]' --confirm
+figma-gateway plugin api call SESSION_KEY setValueForMode \
+  --target '{"$handle":"h1"}' --args '["mode-id",8]' --confirm
+
+# Create a persistent callback, then pass its handle to an event API.
+figma-gateway plugin api callback SESSION_KEY \
+  --code 'return [{title:"JSON",language:"JSON",code:JSON.stringify(serialize(event))}]' \
+  --confirm
+figma-gateway plugin api call SESSION_KEY codegen.on \
+  --args '["generate",{"$handle":"h2"}]' --confirm
+
 figma-gateway plugin exec SESSION_KEY \
   --code 'return { page: figma.currentPage.name, selection: figma.currentPage.selection.map(node => node.id) }' \
   --confirm
@@ -179,7 +225,13 @@ figma-gateway plugin export SESSION_KEY 2429:67732 out/animation.mp4 \
   --format MP4 --scale 1 --fps 30 --quality HIGH
 ```
 
-Arbitrary plugin code and non-GET REST requests require explicit confirmation.
+Plugin API method calls and writes, arbitrary plugin code, and non-GET REST
+requests require explicit confirmation. `plugin api` values support
+`--target` and argument values support `{"$handle":"HANDLE"}` for any live
+object or callback returned by the Plugin, `{"$node":"NODE_ID"}`,
+`{"$figma":"PATH"}`, and `{"$base64":"ENCODED_BYTES"}` references. Handles
+belong to one running Plugin session and expire when that session ends. Dev Mode remains read-only for
+document contents because Figma enforces that boundary.
 
 ## Logs and telemetry
 
@@ -246,6 +298,10 @@ Large responses can be saved under the caller's working directory with `--save`.
 | `get_node` | Serialize a node recursively |
 | `save_screenshots` | Export PNG, JPG, SVG, PDF, MP4, GIF, or WebM files |
 | `execute_plugin_code` | Execute explicitly confirmed JavaScript against the local Plugin API session |
+| `plugin_api_get` | Read any serializable Plugin API property by path |
+| `plugin_api_call` | Call any Plugin API method by path with JSON and live-object references |
+| `plugin_api_set` | Set any writable Plugin API property by path |
+| `plugin_api_callback` | Create a reusable callback handle for event-based Plugin APIs |
 | `figma_rest_request` | Call an official REST `/v1` or `/v2` endpoint |
 | `figma_auth_status` | Report credential configuration without exposing values |
 | `get_comments` | Retrieve file comments and optionally select one comment |

@@ -8,7 +8,9 @@ import pathlib
 import sys
 
 
-if sys.platform == "win32":
+if os.environ.get("FIGMA_GATEWAY_PLUGIN_DIR"):
+    DEFAULT_MANIFEST = pathlib.Path(os.environ["FIGMA_GATEWAY_PLUGIN_DIR"]) / "manifest.json"
+elif sys.platform == "win32":
     DEFAULT_MANIFEST = pathlib.Path(
         os.environ.get("LOCALAPPDATA", pathlib.Path.home() / "AppData" / "Local")
     ) / "FigmaGateway" / "plugin" / "manifest.json"
@@ -46,30 +48,49 @@ def validate_manifest(manifest_path: pathlib.Path):
     return manifest, manifest_path
 
 
+def manifest_summary(manifest, manifest_path):
+    return {
+        "name": manifest["name"],
+        "id": manifest["id"],
+        "manifest": str(manifest_path),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("manifest", nargs="?", type=pathlib.Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("manifest", nargs="?", type=pathlib.Path)
     parser.add_argument("--json", action="store_true", help="Print machine-readable output")
     args = parser.parse_args()
 
     try:
-        manifest, manifest_path = validate_manifest(args.manifest)
+        manifest_paths = [args.manifest] if args.manifest else [
+            DEFAULT_MANIFEST,
+            DEFAULT_MANIFEST.with_name("manifest.dev.json"),
+        ]
+        manifests = [validate_manifest(path) for path in manifest_paths]
     except ValueError as error:
         parser.error(str(error))
 
     if args.json:
-        print(json.dumps({
-            "ok": True,
-            "name": manifest["name"],
-            "id": manifest["id"],
-            "manifest": str(manifest_path),
-            "manualImportRequired": True,
-        }))
+        if args.manifest:
+            manifest, manifest_path = manifests[0]
+            print(json.dumps({
+                "ok": True,
+                **manifest_summary(manifest, manifest_path),
+                "manualImportRequired": True,
+            }))
+        else:
+            print(json.dumps({
+                "ok": True,
+                "manifests": [manifest_summary(*item) for item in manifests],
+                "manualImportRequired": True,
+            }))
         return 0
 
-    print(f"Manifest ready: {manifest_path}")
+    for _, manifest_path in manifests:
+        print(f"Manifest ready: {manifest_path}")
     print("In Figma Desktop, choose Plugins > Development > Import plugin from manifest.")
-    print("Select the manifest path shown above. This step is required once per computer.")
+    print("Select each manifest path shown above. This step is required once per computer.")
     return 0
 
 

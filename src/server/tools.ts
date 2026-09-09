@@ -54,6 +54,46 @@ export function registerTools(server: McpServer, hub: GatewayHub): void {
     },
   }, async (args) => text(await hub.call("execute_plugin_code", args)));
 
+  server.registerTool("plugin_api_get", {
+    description: "Read any serializable property from the Figma Plugin API by path.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      target: z.unknown().optional(),
+    },
+  }, async (args) => text(await hub.call("plugin_api_get", args)));
+
+  server.registerTool("plugin_api_call", {
+    description: "Call any Figma Plugin API method by path. Live Plugin objects can be passed as {$node: id} or {$figma: path}, and bytes as {$base64: value}.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      args: z.array(z.unknown()).optional(),
+      target: z.unknown().optional(),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_call", args)));
+
+  server.registerTool("plugin_api_set", {
+    description: "Set any writable Figma Plugin API property by path. Live Plugin objects can be passed as {$node: id} or {$figma: path}.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      value: z.unknown(),
+      target: z.unknown().optional(),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_set", args)));
+
+  server.registerTool("plugin_api_callback", {
+    description: "Create a persistent callback handle for event-based Figma Plugin APIs. The callback receives figma, event, args, and serialize.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      code: z.string().min(1),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_callback", args)));
+
   server.registerTool("figma_rest_request", {
     description: "Call any official Figma REST v1/v2 endpoint. Non-GET methods require confirm=true. OAuth, personal, and plan access tokens are supported.",
     inputSchema: {

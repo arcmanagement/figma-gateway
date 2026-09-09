@@ -26,6 +26,10 @@ const AUDIT_TOOLS = new Set([
   "list_files",
   "get_node",
   "execute_plugin_code",
+  "plugin_api_get",
+  "plugin_api_call",
+  "plugin_api_set",
+  "plugin_api_callback",
   "save_screenshots",
 ]);
 
@@ -181,6 +185,34 @@ export class GatewayHub {
       } else if (tool === "execute_plugin_code") {
         if (args.confirm !== true) throw new Error("execute_plugin_code requires confirm: true");
         result = await this.requestPlugin(String(args.fileKey || ""), "execute", args);
+      } else if (tool === "plugin_api_get") {
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "get",
+          path: args.path,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_call") {
+        if (args.confirm !== true) throw new Error("plugin_api_call requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "call",
+          path: args.path,
+          args: args.args,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_set") {
+        if (args.confirm !== true) throw new Error("plugin_api_set requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "set",
+          path: args.path,
+          value: args.value,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_callback") {
+        if (args.confirm !== true) throw new Error("plugin_api_callback requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "callback",
+          code: args.code,
+        });
       } else if (tool === "save_screenshots") result = await this.saveScreenshots(args, cwd);
       else throw new Error(`Unknown plugin tool: ${tool}`);
       success = true;
