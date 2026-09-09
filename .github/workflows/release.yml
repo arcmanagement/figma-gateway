@@ -136,18 +136,18 @@ jobs:
           $template = $template.Replace('__INNO_ARCH__', '${{ matrix.inno_arch }}')
           Set-Content -NoNewline -Encoding UTF8 packaging/windows/figma-gateway.iss $template
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
-
       - name: Build installer
         shell: pwsh
         run: |
-          $iscc = @(
-            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $iscc) { throw 'ISCC.exe was not found after installation' }
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = @(
+              "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+              "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'The runner-provided ISCC.exe was not found' }
           & $iscc packaging/windows/figma-gateway.iss
 
       - name: Upload installer
