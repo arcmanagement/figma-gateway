@@ -1,0 +1,6 @@
+.tmp/
+__pycache__/
+*.pyc
+scripts/config.local.sh
+plugin/dist/
+*.tgz

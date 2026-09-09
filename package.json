@@ -1,0 +1,75 @@
+{
+  "name": "@arcmanagement/figma-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcmanagement/figma-gateway.git"
+  },
+  "homepage": "https://github.com/arcmanagement/figma-gateway#readme",
+  "bugs": {
+    "url": "https://github.com/arcmanagement/figma-gateway/issues"
+  },
+  "type": "module",
+  "bin": {
+    "figma-gateway": "dist/cli/index.js",
+    "figma-gateway-mcp": "dist/server/index.js"
+  },
+  "scripts": {
+    "build": "npm run build:server",
+    "build:server": "tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "build:plugin": "node scripts/build-plugin.mjs",
+    "cli": "node dist/cli/index.js",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p plugin/tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test:python": "python3 -m unittest discover -s tests -p 'test_*.py'",
+    "verify:source": "node scripts/verify-public-source.mjs",
+    "verify:history": "node scripts/verify-public-history.mjs",
+    "verify:release": "node scripts/verify-release.mjs"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "npm-shrinkwrap.json",
+    "dist/",
+    "plugin/manifest.template.json",
+    "plugin/src/",
+    "plugin/tsconfig.json",
+    "scripts/bridge-call.py",
+    "scripts/build-plugin.mjs",
+    "scripts/common.sh",
+    "scripts/export-rest.sh",
+    "scripts/export.sh",
+    "scripts/figma-auth.py",
+    "scripts/init-gateway-secret.sh",
+    "scripts/make-executable.mjs",
+    "scripts/register-plugin.py",
+    "scripts/start-plugin.sh",
+    "scripts/structure-export.py",
+    "scripts/structure-to-md.py",
+    "packaging/windows/figma-gateway.cmd",
+    "packaging/windows/figma-gateway-mcp.cmd"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "esbuild": "^0.25.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "overrides": {
+    "hono": "^4.13.7",
+    "qs": "^6.16.0"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.130.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

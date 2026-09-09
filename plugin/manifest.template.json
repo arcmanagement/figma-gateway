@@ -1,0 +1,12 @@
+{
+  "name": "__GATEWAY_NAME__",
+  "id": "__GATEWAY_ID__",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["ws://localhost:__GATEWAY_PORT__"],
+    "reasoning": "Connects only to the local Figma Gateway daemon through WebSocket"
+  }
+}

@@ -1,0 +1,7 @@
+scripts/config.local.sh
+__pycache__/
+*.pyc
+node_modules/
+dist/
+plugin/dist/
+*.tgz

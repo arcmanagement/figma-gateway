@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  verify-and-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+          npm ci --ignore-scripts
+
+      - name: Verify tag and public source
+        env:
+          RELEASE_PROHIBITED_TERMS: ${{ secrets.RELEASE_PROHIBITED_TERMS }}
+          PUBLIC_HISTORY_ROOT: ${{ vars.PUBLIC_HISTORY_ROOT }}
+        run: |
+          node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package version')"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          npm run verify:source
+          npm run verify:history
+
+      - name: Install pinned Gitleaks CLI
+        run: |
+          curl --fail --location --silent --show-error \
+            --output /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum --check
+          tar -xzf /tmp/gitleaks.tar.gz gitleaks
+          chmod 0755 gitleaks
+
+      - name: Scan Git history for secrets
+        run: ./gitleaks git --redact --no-banner .
+
+      - name: Check, test, and audit
+        run: |
+          npm run check
+          npm test
+          npm run test:python
+          npm audit --omit=dev --audit-level=moderate
+
+      - name: Build and verify release package
+        env:
+          RELEASE_PROHIBITED_TERMS: ${{ secrets.RELEASE_PROHIBITED_TERMS }}
+        run: |
+          npm run build:server
+          package_file="$(npm pack --json | jq -r '.[0].filename')"
+          release_file="figma-gateway-$(node -p 'require("./package.json").version').tgz"
+          mv -- "$package_file" "$release_file"
+          npm run verify:release -- "$release_file"
+          node scripts/render-release-metadata.mjs homebrew "$release_file" /tmp/FigmaGateway.rb
+          cp /tmp/FigmaGateway.rb FigmaGateway.rb
+
+      - name: Upload verified package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-package
+          path: |
+            figma-gateway-*.tgz
+            FigmaGateway.rb
+          if-no-files-found: error
+
+  windows-installers:
+    needs: verify-and-pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2025
+            inno_arch: x64compatible
+          - architecture: arm64
+            runner: windows-11-arm
+            inno_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          architecture: ${{ matrix.architecture }}
+          cache: npm
+
+      - name: Download verified package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-package
+          path: artifacts
+
+      - name: Stage application
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force packaging/windows/stage | Out-Null
+          tar -xzf (Get-ChildItem artifacts/figma-gateway-*.tgz).FullName -C packaging/windows/stage --strip-components=1
+          Push-Location packaging/windows/stage
+          npm ci --omit=dev --ignore-scripts
+          Copy-Item packaging/windows/*.cmd .
+          Pop-Location
+          $nodeExecutable = (Get-Command node).Source
+          $nodeRoot = Split-Path $nodeExecutable
+          $nodeLicense = Join-Path $nodeRoot 'LICENSE'
+          if (-not (Test-Path $nodeLicense)) { throw 'The Node.js distribution license was not found' }
+          Copy-Item $nodeExecutable packaging/windows/stage/node.exe
+          Copy-Item $nodeLicense packaging/windows/stage/NODE-LICENSE
+          $template = Get-Content -Raw packaging/windows/figma-gateway.iss.template
+          $template = $template.Replace('__VERSION__', (node -p 'require("./package.json").version'))
+          $template = $template.Replace('__ARCH__', '${{ matrix.architecture }}')
+          $template = $template.Replace('__INNO_ARCH__', '${{ matrix.inno_arch }}')
+          Set-Content -NoNewline -Encoding UTF8 packaging/windows/figma-gateway.iss $template
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe was not found after installation' }
+          & $iscc packaging/windows/figma-gateway.iss
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-${{ matrix.architecture }}
+          path: packaging/windows/output/*.exe
+          if-no-files-found: error
+
+  publish-release:
+    needs: [verify-and-pack, windows-installers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "*"
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            artifacts/figma-gateway-*.tgz \
+            artifacts/figma-gateway-*-windows-x64.exe \
+            artifacts/figma-gateway-*-windows-arm64.exe \
+            artifacts/FigmaGateway.rb \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME - Figma Gateway" \
+            --generate-notes
+
+  update-homebrew-formula:
+    needs: publish-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out public main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download verified Formula
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-package
+          path: artifacts
+
+      - name: Publish Formula in this repository
+        run: |
+          cp artifacts/FigmaGateway.rb Formula/figma-gateway.rb
+          if git diff --quiet -- Formula/figma-gateway.rb; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- Formula/figma-gateway.rb
+          git diff --cached --check
+          git commit -m "Update Homebrew Formula for $GITHUB_REF_NAME"
+          git push origin HEAD:main

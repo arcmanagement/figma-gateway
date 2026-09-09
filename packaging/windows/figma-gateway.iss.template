@@ -1,0 +1,42 @@
+#define AppVersion "__VERSION__"
+#define AppArch "__ARCH__"
+
+[Setup]
+AppId={{89D26A10-EE32-4B1D-9778-74727A546240}
+AppName=Figma Gateway
+AppVersion={#AppVersion}
+AppPublisher=ArcManagement Inc.
+AppPublisherURL=https://github.com/arcmanagement/figma-gateway
+DefaultDirName={localappdata}\Programs\Figma Gateway
+DefaultGroupName=Figma Gateway
+OutputDir=output
+OutputBaseFilename=figma-gateway-{#AppVersion}-windows-{#AppArch}
+Compression=lzma2
+SolidCompression=yes
+PrivilegesRequired=lowest
+ArchitecturesAllowed=__INNO_ARCH__
+ArchitecturesInstallIn64BitMode=__INNO_ARCH__
+ChangesEnvironment=yes
+UninstallDisplayIcon={app}\figma-gateway.cmd
+
+[Files]
+Source: "stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+Root: HKA; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsPathEntry
+
+[Run]
+Filename: "{app}\node.exe"; Parameters: """{app}\dist\cli\index.js"" setup"; Flags: runhidden waituntilterminated; StatusMsg: "Generating the local plugin and starting Figma Gateway..."
+
+[UninstallRun]
+Filename: "{app}\node.exe"; Parameters: """{app}\dist\cli\index.js"" daemon uninstall --confirm"; Flags: runhidden waituntilterminated skipifdoesntexist
+
+[Code]
+function NeedsPathEntry(): Boolean;
+var
+  CurrentPath: String;
+begin
+  if not RegQueryStringValue(HKA, 'Environment', 'Path', CurrentPath) then
+    CurrentPath := '';
+  Result := Pos(';' + ExpandConstant('{app}') + ';', ';' + CurrentPath + ';') = 0;
+end;
