@@ -5,8 +5,8 @@
 class FigmaGateway < Formula
   desc "Local CLI gateway for Figma Desktop development plugins"
   homepage "https://github.com/arcmanagement/figma-gateway"
-  url "https://github.com/arcmanagement/figma-gateway/releases/download/v1.0.0/figma-gateway-1.0.0.tgz"
-  sha256 "13562bfcc44d10040dd68c5c3e89479db659563ea7412a0e15d50a92751cd958"
+  url "https://github.com/arcmanagement/figma-gateway/releases/download/v1.1.0/figma-gateway-1.1.0.tgz"
+  sha256 "2ecbb6173f5f4d7e2d564459ca5594494537d1bfc4f74d4332be87fd301eb2b9"
   license "MIT"
 
   depends_on "node@22"
@@ -27,10 +27,12 @@ class FigmaGateway < Formula
 
   def caveats
     manifest = Pathname.new(Dir.home)/"Library/Application Support/Figma Gateway/plugin/manifest.json"
+    dev_manifest = Pathname.new(Dir.home)/"Library/Application Support/Figma Gateway/plugin/manifest.dev.json"
     <<~EOS
-      Import this development plugin once in Figma Desktop:
+      Import both development plugin manifests once in Figma Desktop:
         Plugins > Development > Import plugin from manifest...
         #{manifest}
+        #{dev_manifest}
 
       Figma Gateway is already registered as a login service.
     EOS
