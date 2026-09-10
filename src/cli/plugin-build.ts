@@ -6,7 +6,7 @@ import type { CliProfile } from "./config.js";
 
 export function localPluginDirectory(
   platform: NodeJS.Platform = process.platform,
-  homeDir = os.homedir(),
+  homeDir = os.userInfo().homedir,
   environment: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === "darwin") {

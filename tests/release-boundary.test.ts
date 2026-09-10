@@ -36,6 +36,80 @@ test("Homebrew Formula defers per-user setup until after the sandboxed install",
   assert.match(text, /plugin\/dev\/manifest\.json/);
 });
 
+test("Homebrew Cask installs signed macOS entrypoints and starts per-user setup", async (context) => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "figma-gateway-cask-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const arm64Archive = path.join(directory, "arm64.zip");
+  const x64Archive = path.join(directory, "x64.zip");
+  const cask = path.join(directory, "figma-gateway.rb");
+  await writeFile(arm64Archive, "arm64 release", "utf8");
+  await writeFile(x64Archive, "x64 release", "utf8");
+  await run(process.execPath, [
+    path.join(root, "scripts", "render-release-metadata.mjs"),
+    "cask",
+    arm64Archive,
+    x64Archive,
+    cask,
+  ], { cwd: root });
+  const text = await readFile(cask, "utf8");
+  assert.match(text, /arch arm: "arm64", intel: "x64"/);
+  assert.match(text, /Developer ID signed/);
+  assert.match(text, /Contents\/MacOS\/figma-gateway"/);
+  assert.match(text, /Contents\/MacOS\/figma-gateway-mcp"/);
+  assert.match(text, /args:\s+\["setup"\]/);
+  assert.match(text, /sudo:\s+:if_needed/);
+  assert.doesNotMatch(text, /^\s*(?:postflight|uninstall_preflight) do/m);
+  assert.doesNotMatch(text, /__[A-Z0-9_]+__/);
+});
+
+test("release stays draft until signed macOS artifacts are attached", async () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const releaseWorkflow = await readFile(path.join(root, ".github", "workflows", "release.yml"), "utf8");
+  const publishWorkflow = await readFile(
+    path.join(root, ".github", "workflows", "publish-release.yml"),
+    "utf8",
+  );
+  assert.match(releaseWorkflow, /gh release create[\s\S]*--draft/);
+  assert.doesNotMatch(releaseWorkflow, /git push origin HEAD:main/);
+  assert.match(publishWorkflow, /workflow_dispatch:/);
+  assert.match(publishWorkflow, /runs-on: macos-latest/);
+  assert.match(publishWorkflow, /figma-gateway-\$version-macos-arm64\.zip/);
+  assert.match(publishWorkflow, /figma-gateway-\$version-macos-x64\.zip/);
+  assert.match(publishWorkflow, /shasum -a 256 -c/);
+  assert.match(publishWorkflow, /render-release-metadata\.mjs cask/);
+  assert.match(publishWorkflow, /cmp \/tmp\/ExpectedFigmaGatewayCask\.rb artifacts\/FigmaGatewayCask\.rb/);
+  assert.match(publishWorkflow, /codesign --verify --deep --strict/);
+  assert.match(publishWorkflow, /TeamIdentifier=M46W5MVAQP/);
+  assert.match(publishWorkflow, /stapler validate/);
+  assert.match(publishWorkflow, /source=Notarized Developer ID/);
+  assert.match(publishWorkflow, /git push origin HEAD:main/);
+  assert.match(publishWorkflow, /gh release edit "\$tag" --repo "\$REPOSITORY" --draft=false/);
+  assert.ok(
+    publishWorkflow.indexOf("git push origin HEAD:main") < publishWorkflow.indexOf("gh release edit"),
+    "Homebrew metadata must publish only through the verified workflow before the draft is published",
+  );
+  await assert.rejects(
+    readFile(path.join(root, ".github", "workflows", "publish-homebrew.yml"), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
+test("macOS public distribution requires Developer ID signing and notarization", async () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const script = await readFile(path.join(root, "scripts", "dist-macos.sh"), "utf8");
+  assert.match(script, /SIGN_IDENTITY and NOTARY_PROFILE are required/);
+  assert.match(script, /codesign --force --options runtime --timestamp/);
+  assert.match(script, /--entitlements packaging\/macos\/Node\.entitlements/);
+  assert.match(script, /notarytool submit/);
+  assert.match(script, /stapler staple/);
+  assert.match(script, /spctl --assess --type execute/);
+  assert.match(script, /git status --porcelain/);
+  assert.match(script, /git describe --tags --exact-match HEAD/);
+  assert.match(script, /--norsrc/);
+  assert.doesNotMatch(script, /skip signing|skip notarization/i);
+});
+
 test("npm package excludes a locally built credential-bearing Plugin", async (context) => {
   const root = path.resolve(import.meta.dirname, "..");
   const localArtifact = path.join(root, "plugin", "dist", "release-boundary-test");

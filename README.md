@@ -66,19 +66,26 @@ The daemon routes requests by session key, file metadata, `editorType`, and `edi
 ## Install on macOS with Homebrew
 
 ```bash
-brew trust --formula arcmanagement/figma-gateway/figma-gateway
 brew tap arcmanagement/figma-gateway https://github.com/arcmanagement/figma-gateway.git
-brew install arcmanagement/figma-gateway/figma-gateway
-figma-gateway setup
+brew trust --cask arcmanagement/figma-gateway/figma-gateway
+brew install --cask arcmanagement/figma-gateway/figma-gateway
 ```
 
 The public Figma Gateway repository is also the Homebrew tap; no separate tap
-repository is required. The Formula-level trust command is required before
-adding this custom-URL tap. Homebrew isolates Formula installation from the
-user Keychain and home directory, so run `figma-gateway setup` once after
-installation. Setup generates the per-machine Plugin and registers the daemon
-as a login service. Homebrew prints both manifest paths to import into Figma
-once.
+repository is required. The Cask installs an ArcManagement Inc. Developer ID
+signed and Apple-notarized background application and both CLI entrypoints.
+Installation generates the per-machine Plugin and registers the daemon as a
+login service. Homebrew prints both manifest paths to import into Figma once.
+
+The legacy Formula remains available for compatibility. It requires
+`figma-gateway setup` after installation and does not provide the Developer ID
+signed distribution:
+
+```bash
+brew trust --formula arcmanagement/figma-gateway/figma-gateway
+brew install --formula arcmanagement/figma-gateway/figma-gateway
+figma-gateway setup
+```
 
 ## Install on Windows
 

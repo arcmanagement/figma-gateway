@@ -1,0 +1,121 @@
+name: Publish verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft release tag to verify and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-verified-release
+
+jobs:
+  verify-and-publish:
+    runs-on: macos-latest
+    steps:
+      - name: Check out public main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Verify complete draft and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          version="${tag#v}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          test "$tag" = "v$version"
+          test "$(gh release view "$tag" --repo "$REPOSITORY" --json isDraft --jq .isDraft)" = true
+
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          tag_commit="$(git rev-parse "$tag^{commit}")"
+          git merge-base --is-ancestor "$tag_commit" origin/main
+          git checkout --detach "$tag"
+          test "$(node -p 'require("./package.json").version')" = "$version"
+
+          required=(
+            "figma-gateway-$version.tgz"
+            "figma-gateway-$version-windows-x64.exe"
+            "figma-gateway-$version-windows-arm64.exe"
+            "figma-gateway-$version-macos-arm64.zip"
+            "figma-gateway-$version-macos-arm64.zip.sha256.txt"
+            "figma-gateway-$version-macos-x64.zip"
+            "figma-gateway-$version-macos-x64.zip.sha256.txt"
+            "FigmaGateway.rb"
+            "FigmaGatewayCask.rb"
+          )
+          assets="$(gh release view "$tag" --repo "$REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in "${required[@]}"; do
+            grep -Fxq "$asset" <<<"$assets" || { echo "Missing release asset: $asset" >&2; exit 1; }
+          done
+
+          mkdir -p artifacts
+          for asset in "${required[@]}"; do
+            gh release download "$tag" --repo "$REPOSITORY" --pattern "$asset" --dir artifacts
+          done
+          (
+            cd artifacts
+            shasum -a 256 -c "figma-gateway-$version-macos-arm64.zip.sha256.txt"
+            shasum -a 256 -c "figma-gateway-$version-macos-x64.zip.sha256.txt"
+          )
+          for archive in artifacts/figma-gateway-*-macos-*.zip; do
+            if unzip -Z1 "$archive" | grep -Eq '(^|/)\._|^__MACOSX/'; then
+              echo "AppleDouble metadata found in $archive" >&2
+              exit 1
+            fi
+          done
+
+          node scripts/render-release-metadata.mjs homebrew \
+            "artifacts/figma-gateway-$version.tgz" \
+            /tmp/ExpectedFigmaGateway.rb
+          node scripts/render-release-metadata.mjs cask \
+            "artifacts/figma-gateway-$version-macos-arm64.zip" \
+            "artifacts/figma-gateway-$version-macos-x64.zip" \
+            /tmp/ExpectedFigmaGatewayCask.rb
+          cmp /tmp/ExpectedFigmaGateway.rb artifacts/FigmaGateway.rb
+          cmp /tmp/ExpectedFigmaGatewayCask.rb artifacts/FigmaGatewayCask.rb
+
+          for arch in arm64 x64; do
+            extracted="/tmp/figma-gateway-$arch"
+            mkdir -p "$extracted"
+            ditto -x -k "artifacts/figma-gateway-$version-macos-$arch.zip" "$extracted"
+            app="$extracted/Figma Gateway.app"
+            test -d "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign --display --verbose=4 "$app" 2>"/tmp/codesign-$arch.txt"
+            grep -Fxq "TeamIdentifier=M46W5MVAQP" "/tmp/codesign-$arch.txt"
+            grep -Eq '^Authority=Developer ID Application: .+ \(M46W5MVAQP\)$' "/tmp/codesign-$arch.txt"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app" 2>"/tmp/spctl-$arch.txt"
+            grep -Fxq "source=Notarized Developer ID" "/tmp/spctl-$arch.txt"
+          done
+
+          git checkout -B main origin/main
+          mkdir -p Casks
+          cp artifacts/FigmaGateway.rb Formula/figma-gateway.rb
+          cp artifacts/FigmaGatewayCask.rb Casks/figma-gateway.rb
+          if ! git diff --quiet -- Formula/figma-gateway.rb Casks/figma-gateway.rb; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- Formula/figma-gateway.rb Casks/figma-gateway.rb
+            git diff --cached --check
+            git commit -m "Update Homebrew metadata for $tag"
+            git push origin HEAD:main
+          fi
+
+          gh release edit "$tag" --repo "$REPOSITORY" --draft=false

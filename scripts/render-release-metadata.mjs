@@ -22,6 +22,16 @@ if (mode === "homebrew") {
     VERSION: version,
     SHA256: (await hash(archive)).toLowerCase(),
   });
+} else if (mode === "cask") {
+  const [arm64Archive, x64Archive, output] = args;
+  if (!arm64Archive || !x64Archive || !output) {
+    throw new Error("Usage: render-release-metadata.mjs cask <arm64-archive> <x64-archive> <output>");
+  }
+  await render("packaging/homebrew/figma-gateway.rb.cask.template", output, {
+    VERSION: version,
+    SHA256_ARM64: (await hash(arm64Archive)).toLowerCase(),
+    SHA256_X64: (await hash(x64Archive)).toLowerCase(),
+  });
 } else {
-  throw new Error("Mode must be homebrew");
+  throw new Error("Mode must be homebrew or cask");
 }

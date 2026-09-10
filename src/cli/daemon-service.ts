@@ -201,7 +201,7 @@ export async function runDaemonService(
   const action = argv[0] || "status";
   const confirm = argv.slice(1).includes("--confirm");
   const spawn = dependencies.spawn || spawnSync;
-  const homeDir = dependencies.homeDir || os.homedir();
+  const homeDir = dependencies.homeDir || os.userInfo().homedir;
   const uid = dependencies.uid ?? process.getuid?.();
   if (uid === undefined) throw new Error("Could not determine the current user ID");
 
@@ -211,7 +211,7 @@ export async function runDaemonService(
   const logPath = path.join(logsDir, "figma-gateway.log");
   const domain = `gui/${uid}`;
   const target = `${domain}/${DAEMON_SERVICE_LABEL}`;
-  const waitDelays = dependencies.waitDelays || [0, 50, 100, 250, 500, 1_000];
+  const waitDelays = dependencies.waitDelays || [0, 100, 250, 500, 1_000, 2_000, 4_000, 8_000];
   const serviceStatus = async (): Promise<Record<string, unknown>> => {
     const installed = await exists(plistPath);
     const configuration = installed ? await installedConfiguration(plistPath) : null;
