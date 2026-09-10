@@ -64,11 +64,15 @@ class RegisterPluginTest(unittest.TestCase):
             plugin.mkdir()
             (plugin / "code.js").write_text("", encoding="utf-8")
             (plugin / "ui.html").write_text("", encoding="utf-8")
-            for file_name, name, plugin_id in (
-                ("manifest.json", "Figma Gateway", "figma-gateway-shared-design"),
-                ("manifest.dev.json", "Figma Gateway", "figma-gateway-shared-dev"),
+            dev_plugin = plugin / "dev"
+            dev_plugin.mkdir()
+            (dev_plugin / "code.js").write_text("", encoding="utf-8")
+            (dev_plugin / "ui.html").write_text("", encoding="utf-8")
+            for manifest_path, name, plugin_id in (
+                (plugin / "manifest.json", "Figma Gateway", "figma-gateway-shared-design"),
+                (dev_plugin / "manifest.json", "Figma Gateway", "figma-gateway-shared-dev"),
             ):
-                (plugin / file_name).write_text(json.dumps({
+                manifest_path.write_text(json.dumps({
                     "name": name,
                     "id": plugin_id,
                     "main": "code.js",

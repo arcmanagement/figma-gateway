@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { build } from "esbuild";
@@ -52,14 +52,19 @@ const configuredOutput = option("out-dir", "");
 const out = configuredOutput
   ? path.resolve(configuredOutput)
   : path.join(root, "plugin", "dist", instance);
+const devOut = path.join(out, "dev");
 await mkdir(out, { recursive: true, mode: 0o700 });
-await writeFile(path.join(out, "code.js"), code, { mode: 0o600 });
-await writeFile(path.join(out, "ui.html"), ui, { mode: 0o600 });
+await mkdir(devOut, { recursive: true, mode: 0o700 });
+await rm(path.join(out, "manifest.dev.json"), { force: true });
+for (const directory of [out, devOut]) {
+  await writeFile(path.join(directory, "code.js"), code, { mode: 0o600 });
+  await writeFile(path.join(directory, "ui.html"), ui, { mode: 0o600 });
+}
 
 const manifestTemplate = await readFile(path.join(root, "plugin", "manifest.template.json"), "utf8");
 const permissions = ["currentuser", "activeusers", "fileusers", "payments", "teamlibrary"];
 
-async function writeManifest(fileName, id, name, editorType, capabilities, extra = {}) {
+async function writeManifest(directory, id, name, editorType, capabilities, extra = {}) {
   const manifest = manifestTemplate
     .replaceAll("__GATEWAY_NAME__", name)
     .replaceAll("__GATEWAY_ID__", id)
@@ -74,7 +79,7 @@ async function writeManifest(fileName, id, name, editorType, capabilities, extra
     ...extra,
   };
   await writeFile(
-    path.join(out, fileName),
+    path.join(directory, "manifest.json"),
     `${JSON.stringify(manifestData, null, 2)}\n`,
     { mode: 0o600 },
   );
@@ -83,18 +88,18 @@ async function writeManifest(fileName, id, name, editorType, capabilities, extra
 // Figma rejects a single manifest containing both FigJam and Dev Mode. These two
 // registrations share the same runtime, gateway instance, product name, and secret.
 await writeManifest(
-  "manifest.json",
+  out,
   "figma-gateway-shared-design",
   baseName,
   ["figma", "figjam", "slides", "buzz"],
   ["textreview"],
 );
 await writeManifest(
-  "manifest.dev.json",
+  devOut,
   "figma-gateway-shared-dev",
   baseName,
   ["dev"],
   ["inspect", "codegen", "vscode"],
   { codegenLanguages: [{ label: "JSON", value: "json" }] },
 );
-process.stdout.write(`${path.join(out, "manifest.json")}\n${path.join(out, "manifest.dev.json")}\n`);
+process.stdout.write(`${path.join(out, "manifest.json")}\n${path.join(devOut, "manifest.json")}\n`);

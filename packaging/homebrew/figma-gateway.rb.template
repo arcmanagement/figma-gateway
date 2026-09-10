@@ -21,20 +21,19 @@ class FigmaGateway < Formula
     (bin/"figma-gateway-mcp").write_env_script libexec/"dist/server/index.js", PATH: node_path
   end
 
-  post_install_steps do
-    run "figma-gateway", args: ["setup"], base: :bin, print_stdout: true
-  end
-
   def caveats
     manifest = Pathname.new(Dir.home)/"Library/Application Support/Figma Gateway/plugin/manifest.json"
-    dev_manifest = Pathname.new(Dir.home)/"Library/Application Support/Figma Gateway/plugin/manifest.dev.json"
+    dev_manifest = Pathname.new(Dir.home)/"Library/Application Support/Figma Gateway/plugin/dev/manifest.json"
     <<~EOS
+      Complete per-user setup once after installation:
+        figma-gateway setup
+
       Import both development plugin manifests once in Figma Desktop:
         Plugins > Development > Import plugin from manifest...
         #{manifest}
         #{dev_manifest}
 
-      Figma Gateway is already registered as a login service.
+      Setup registers Figma Gateway as a login service.
     EOS
   end
 

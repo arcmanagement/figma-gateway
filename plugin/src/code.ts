@@ -12,7 +12,10 @@ type IncomingRequest = {
 };
 
 const sessionKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const pluginApi = new PluginApiDispatcher(figma, { __html__, __uiFiles__ });
+const pluginApi = new PluginApiDispatcher(figma, {
+  __html__,
+  __uiFiles__: typeof __uiFiles__ === "undefined" ? {} : __uiFiles__,
+});
 
 figma.showUI(__html__, { width: 320, height: 120 });
 

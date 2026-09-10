@@ -41,6 +41,6 @@ export function buildLocalPlugin(profile: CliProfile): LocalPluginBuild {
   }
   return {
     manifest: path.join(outputDirectory, "manifest.json"),
-    devManifest: path.join(outputDirectory, "manifest.dev.json"),
+    devManifest: path.join(outputDirectory, "dev", "manifest.json"),
   };
 }

@@ -17,6 +17,25 @@ test("Windows launchers use the bundled architecture-specific Node.js runtime", 
   }
 });
 
+test("Homebrew Formula defers per-user setup until after the sandboxed install", async (context) => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "figma-gateway-homebrew-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const archive = path.join(directory, "figma-gateway.tgz");
+  const formula = path.join(directory, "figma-gateway.rb");
+  await writeFile(archive, "release archive", "utf8");
+  await run(process.execPath, [
+    path.join(root, "scripts", "render-release-metadata.mjs"),
+    "homebrew",
+    archive,
+    formula,
+  ], { cwd: root });
+  const text = await readFile(formula, "utf8");
+  assert.doesNotMatch(text, /post_install/);
+  assert.match(text, /figma-gateway setup/);
+  assert.match(text, /plugin\/dev\/manifest\.json/);
+});
+
 test("npm package excludes a locally built credential-bearing Plugin", async (context) => {
   const root = path.resolve(import.meta.dirname, "..");
   const localArtifact = path.join(root, "plugin", "dist", "release-boundary-test");

@@ -65,7 +65,7 @@ def main() -> int:
     try:
         manifest_paths = [args.manifest] if args.manifest else [
             DEFAULT_MANIFEST,
-            DEFAULT_MANIFEST.with_name("manifest.dev.json"),
+            DEFAULT_MANIFEST.parent / "dev" / "manifest.json",
         ]
         manifests = [validate_manifest(path) for path in manifest_paths]
     except ValueError as error:

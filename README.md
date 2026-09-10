@@ -69,13 +69,16 @@ The daemon routes requests by session key, file metadata, `editorType`, and `edi
 brew trust --formula arcmanagement/figma-gateway/figma-gateway
 brew tap arcmanagement/figma-gateway https://github.com/arcmanagement/figma-gateway.git
 brew install arcmanagement/figma-gateway/figma-gateway
+figma-gateway setup
 ```
 
 The public Figma Gateway repository is also the Homebrew tap; no separate tap
 repository is required. The Formula-level trust command is required before
-adding this custom-URL tap. Installation generates the per-machine Plugin and
-registers the daemon as a login service. Homebrew prints the manifest path to
-import into Figma once.
+adding this custom-URL tap. Homebrew isolates Formula installation from the
+user Keychain and home directory, so run `figma-gateway setup` once after
+installation. Setup generates the per-machine Plugin and registers the daemon
+as a login service. Homebrew prints both manifest paths to import into Figma
+once.
 
 ## Install on Windows
 
@@ -87,7 +90,7 @@ code-signed, so Windows may show an unknown-publisher warning.
 The installer generates the per-machine Plugin and registers a per-user login
 task with automatic restart. Import both
 `%LOCALAPPDATA%\FigmaGateway\plugin\manifest.json` and
-`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.dev.json` into Figma once. Both x64
+`%LOCALAPPDATA%\FigmaGateway\plugin\dev\manifest.json` into Figma once. Both x64
 and ARM64 installers are published. Each installer includes the matching
 Node.js runtime and its license, so a separate Node.js installation is not
 required.
@@ -139,7 +142,7 @@ build emits two registrations because Figma does not allow `figjam` and `dev`
 in the same manifest:
 
 - `manifest.json`: Figma Design, FigJam, Slides, Buzz, Motion, and text review
-- `manifest.dev.json`: Dev Mode inspect, Codegen, and Figma for VS Code
+- `dev/manifest.json`: Dev Mode inspect, Codegen, and Figma for VS Code
 
 Both registrations connect to the same `shared` gateway instance. The manifests
 enable every public permission and capability that Figma exposes to local
