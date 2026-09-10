@@ -66,24 +66,33 @@ test("Homebrew Cask installs signed macOS entrypoints and starts per-user setup"
 test("release stays draft until signed macOS artifacts are attached", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const releaseWorkflow = await readFile(path.join(root, ".github", "workflows", "release.yml"), "utf8");
-  const metadataWorkflow = await readFile(
-    path.join(root, ".github", "workflows", "publish-homebrew.yml"),
-    "utf8",
-  );
   const publishWorkflow = await readFile(
     path.join(root, ".github", "workflows", "publish-release.yml"),
     "utf8",
   );
   assert.match(releaseWorkflow, /gh release create[\s\S]*--draft/);
   assert.doesNotMatch(releaseWorkflow, /git push origin HEAD:main/);
-  assert.match(metadataWorkflow, /types: \[published\]/);
-  assert.match(metadataWorkflow, /--pattern FigmaGatewayCask\.rb/);
-  assert.match(metadataWorkflow, /git push origin HEAD:main/);
   assert.match(publishWorkflow, /workflow_dispatch:/);
+  assert.match(publishWorkflow, /runs-on: macos-latest/);
   assert.match(publishWorkflow, /figma-gateway-\$version-macos-arm64\.zip/);
   assert.match(publishWorkflow, /figma-gateway-\$version-macos-x64\.zip/);
-  assert.match(publishWorkflow, /sha256sum --check/);
+  assert.match(publishWorkflow, /shasum -a 256 -c/);
+  assert.match(publishWorkflow, /render-release-metadata\.mjs cask/);
+  assert.match(publishWorkflow, /cmp \/tmp\/ExpectedFigmaGatewayCask\.rb artifacts\/FigmaGatewayCask\.rb/);
+  assert.match(publishWorkflow, /codesign --verify --deep --strict/);
+  assert.match(publishWorkflow, /TeamIdentifier=M46W5MVAQP/);
+  assert.match(publishWorkflow, /stapler validate/);
+  assert.match(publishWorkflow, /source=Notarized Developer ID/);
+  assert.match(publishWorkflow, /git push origin HEAD:main/);
   assert.match(publishWorkflow, /gh release edit "\$tag" --repo "\$REPOSITORY" --draft=false/);
+  assert.ok(
+    publishWorkflow.indexOf("git push origin HEAD:main") < publishWorkflow.indexOf("gh release edit"),
+    "Homebrew metadata must publish only through the verified workflow before the draft is published",
+  );
+  await assert.rejects(
+    readFile(path.join(root, ".github", "workflows", "publish-homebrew.yml"), "utf8"),
+    { code: "ENOENT" },
+  );
 });
 
 test("macOS public distribution requires Developer ID signing and notarization", async () => {

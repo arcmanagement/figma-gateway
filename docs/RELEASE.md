@@ -58,9 +58,12 @@ the private repository because that history is not a publication source.
    ```
 
 8. Run the `Publish verified release` workflow for the tag. This is the supported
-   publication path: it verifies every required asset, both macOS checksums, and
-   the absence of AppleDouble metadata before publishing the draft. Publishing
-   then updates the Formula and Cask on `main`. Do not publish from the GitHub UI.
+   publication path: it regenerates and exactly compares the Formula and Cask,
+   verifies every required asset and both macOS checksums, rejects AppleDouble
+   metadata, and checks both apps for the ArcManagement Developer ID signature,
+   stapled notarization ticket, and Gatekeeper acceptance. It commits the verified
+   Formula and Cask to `main` before publishing the draft. Do not publish from the
+   GitHub UI; no release-event workflow updates Homebrew metadata.
 9. Test the Cask on a clean macOS account and both Windows installers on their
    matching architectures.
 
