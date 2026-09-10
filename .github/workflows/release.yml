@@ -191,33 +191,5 @@ jobs:
             artifacts/FigmaGateway.rb \
             --verify-tag \
             --title "$GITHUB_REF_NAME - Figma Gateway" \
-            --generate-notes
-
-  update-homebrew-formula:
-    needs: publish-release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out public main
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Download verified Formula
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-package
-          path: artifacts
-
-      - name: Publish Formula in this repository
-        run: |
-          cp artifacts/FigmaGateway.rb Formula/figma-gateway.rb
-          if git diff --quiet -- Formula/figma-gateway.rb; then exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- Formula/figma-gateway.rb
-          git diff --cached --check
-          git commit -m "Update Homebrew Formula for $GITHUB_REF_NAME"
-          git push origin HEAD:main
+            --generate-notes \
+            --draft

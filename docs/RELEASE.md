@@ -32,10 +32,37 @@ the private repository because that history is not a publication source.
 
 1. Verify that the public `main` commit is descended from the approved public root.
 2. Update `package.json` and `npm-shrinkwrap.json` to the intended version.
-3. Create and push the matching `v<version>` tag.
-4. Wait for both Windows installer jobs and the release job to finish.
-5. Test the macOS package on a clean user account and both Windows installers
-   on their matching architectures.
+3. Create the matching `v<version>` tag locally, without pushing it yet. The
+   signed build refuses a dirty worktree or a HEAD without this exact tag.
+4. On the trusted Apple Silicon maintainer Mac, build the Developer ID signed
+   and notarized arm64 and x64 macOS archives:
+
+   ```bash
+   VERSION=<version> \
+   SIGN_IDENTITY="A0F2E0F22F8EA30B783A8DCBB2397B852C780062" \
+   NOTARY_PROFILE="abg-notary" \
+   npm run dist:macos
+   ```
+
+5. Push the verified tag.
+6. Wait for both Windows installer jobs and the draft release job to finish.
+7. Upload the locally signed artifacts and generated Cask to the draft release:
+
+   ```bash
+   gh release upload "v<version>" \
+     artifacts/macos/figma-gateway-<version>-macos-arm64.zip \
+     artifacts/macos/figma-gateway-<version>-macos-arm64.zip.sha256.txt \
+     artifacts/macos/figma-gateway-<version>-macos-x64.zip \
+     artifacts/macos/figma-gateway-<version>-macos-x64.zip.sha256.txt \
+     artifacts/macos/FigmaGatewayCask.rb
+   ```
+
+8. Run the `Publish verified release` workflow for the tag. This is the supported
+   publication path: it verifies every required asset, both macOS checksums, and
+   the absence of AppleDouble metadata before publishing the draft. Publishing
+   then updates the Formula and Cask on `main`. Do not publish from the GitHub UI.
+9. Test the Cask on a clean macOS account and both Windows installers on their
+   matching architectures.
 
 The GitHub Release publishes unsigned x64 and ARM64 Windows installers. WinGet
 distribution is outside the current scope because releases do not have the
@@ -45,18 +72,19 @@ required code-signing certificate.
 
 The public `arcmanagement/figma-gateway` repository is also the Homebrew tap;
 do not create a separate `arcmanagement/homebrew-tap` repository. The release
-workflow generates `Formula/figma-gateway.rb` from the exact release archive,
-attaches it to the release, and commits it back to public `main`. Confirm that
-the Formula update job succeeds, then run `brew style` and `brew audit
---strict` against the committed Formula.
+workflow generates `Formula/figma-gateway.rb` from the exact release archive
+and attaches it to the draft release. The trusted Mac build generates
+`FigmaGatewayCask.rb` from the notarized archives. Publishing the release commits
+both files back to public `main`. Confirm that the metadata workflow succeeds,
+then run `brew style` and `brew audit --strict` against the committed Formula and
+Cask.
 
 Test the exact public repository as a custom-URL tap:
 
 ```bash
-brew trust --formula arcmanagement/figma-gateway/figma-gateway
 brew tap arcmanagement/figma-gateway https://github.com/arcmanagement/figma-gateway.git
-brew install arcmanagement/figma-gateway/figma-gateway
-figma-gateway setup
+brew trust --cask arcmanagement/figma-gateway/figma-gateway
+brew install --cask arcmanagement/figma-gateway/figma-gateway
 ```
 
 ## Destructive cleanup
