@@ -5,8 +5,8 @@
 class FigmaGateway < Formula
   desc "Local CLI gateway for Figma Desktop development plugins"
   homepage "https://github.com/arcmanagement/figma-gateway"
-  url "https://github.com/arcmanagement/figma-gateway/releases/download/v1.1.1/figma-gateway-1.1.1.tgz"
-  sha256 "a13461e347e001e9ce6831ab6fe40362cb410403073d0bfe08ad3c6350c8259d"
+  url "https://github.com/arcmanagement/figma-gateway/releases/download/v1.2.0/figma-gateway-1.2.0.tgz"
+  sha256 "271c322f18e30e2e84c41f1a0b18ba6020845185acc9da0cc3eb44706c238b8c"
   license "MIT"
 
   depends_on "node@22"
