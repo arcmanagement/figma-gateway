@@ -92,6 +92,99 @@ test("CLI requires explicit confirmation for arbitrary Plugin execution", async 
   );
 });
 
+test("CLI exposes Plugin API get, call, and set without JavaScript", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.FIGMA_GATEWAY_SECRET;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.FIGMA_GATEWAY_SECRET;
+    else process.env.FIGMA_GATEWAY_SECRET = originalSecret;
+  });
+  process.env.FIGMA_GATEWAY_SECRET = "shared-secret";
+  const requests: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true, result: "ok" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await runCli(["plugin", "api", "get", "session-1", "editorType"], () => undefined);
+  await runCli([
+    "plugin", "api", "call", "session-1", "getNodeByIdAsync",
+    "--args", '["1:2"]', "--confirm",
+  ], () => undefined);
+  await runCli([
+    "plugin", "api", "set", "session-1", "currentPage.selection",
+    "--value", '[{"$node":"1:2"}]', "--confirm",
+  ], () => undefined);
+  await runCli([
+    "plugin", "api", "callback", "session-1",
+    "--code", "return [];", "--confirm",
+  ], () => undefined);
+
+  assert.deepEqual(requests.map((request) => request.tool), [
+    "plugin_api_get", "plugin_api_call", "plugin_api_set", "plugin_api_callback",
+  ]);
+  assert.deepEqual((requests[1] as { arguments: unknown }).arguments, {
+    fileKey: "session-1",
+    path: "getNodeByIdAsync",
+    args: ["1:2"],
+    confirm: true,
+  });
+});
+
+test("CLI requires confirmation for Plugin API calls and writes", async () => {
+  await assert.rejects(
+    runCli(["plugin", "api", "call", "session-1", "createRectangle"]),
+    /requires --confirm/,
+  );
+  await assert.rejects(
+    runCli(["plugin", "api", "set", "session-1", "currentPage.name", "--value", '"Page"']),
+    /requires --confirm/,
+  );
+});
+
+test("CLI lists, describes, and invokes exact generated Plugin API commands", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.FIGMA_GATEWAY_SECRET;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.FIGMA_GATEWAY_SECRET;
+    else process.env.FIGMA_GATEWAY_SECRET = originalSecret;
+  });
+  process.env.FIGMA_GATEWAY_SECRET = "shared-secret";
+  const output: string[] = [];
+  await runCli(["plugin", "api", "list", "--search", "create-rectangle"], (value) => output.push(value));
+  assert.match(output.at(-1) || "", /figma\.create-rectangle/);
+  await runCli(["plugin", "api", "describe", "figma.variables.create-variable"], (value) => output.push(value));
+  assert.match(output.at(-1) || "", /collectionId/);
+
+  let request: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    request = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ ok: true, result: { id: "1:2" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await runCli([
+    "plugin", "api", "figma.get-node-by-id-async", "session-1",
+    "--params", '{"id":"1:2"}', "--confirm",
+  ], () => undefined);
+  assert.deepEqual(request, {
+    tool: "plugin_api_invoke",
+    arguments: {
+      fileKey: "session-1",
+      apiId: "figma.get-node-by-id-async",
+      params: { id: "1:2" },
+      confirm: true,
+    },
+    cwd: process.cwd(),
+  });
+});
+
 test("CLI rejects a non-Figma URL before starting the Plugin", async () => {
   await assert.rejects(
     runCli(

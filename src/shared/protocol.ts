@@ -25,7 +25,7 @@ export interface PluginConnected {
 export interface PluginRequest {
   type: "request";
   id: string;
-  operation: "get_node" | "export" | "execute";
+  operation: "get_node" | "export" | "execute" | "api";
   payload: Record<string, unknown>;
 }
 
@@ -54,4 +54,11 @@ export const PLUGIN_TOOLS = new Set([
   "get_node",
   "save_screenshots",
   "execute_plugin_code",
+  "plugin_api_get",
+  "plugin_api_call",
+  "plugin_api_set",
+  "plugin_api_callback",
+  "plugin_api_invoke",
+  "plugin_callback_create",
+  "plugin_callback_events",
 ]);

@@ -18,7 +18,12 @@ export function localPluginDirectory(
   return path.join(environment.XDG_DATA_HOME || path.join(homeDir, ".local", "share"), "figma-gateway", "plugin");
 }
 
-export function buildLocalPlugin(profile: CliProfile): string {
+export type LocalPluginBuild = {
+  manifest: string;
+  devManifest: string;
+};
+
+export function buildLocalPlugin(profile: CliProfile): LocalPluginBuild {
   if (!profile.secret) throw new Error("A local gateway secret is required before building the Plugin");
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const outputDirectory = localPluginDirectory();
@@ -34,5 +39,8 @@ export function buildLocalPlugin(profile: CliProfile): string {
   if (result.status !== 0) {
     throw new Error((result.stderr || result.stdout || "Local Plugin build failed").trim());
   }
-  return path.join(outputDirectory, "manifest.json");
+  return {
+    manifest: path.join(outputDirectory, "manifest.json"),
+    devManifest: path.join(outputDirectory, "manifest.dev.json"),
+  };
 }

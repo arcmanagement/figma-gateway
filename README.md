@@ -81,12 +81,13 @@ import into Figma once.
 
 Download the x64 or ARM64 installer for your machine from
 [GitHub Releases](https://github.com/arcmanagement/figma-gateway/releases/latest)
-and run it. WinGet distribution is not provided. The v1.0.0 installers are not
+and run it. WinGet distribution is not provided. The installers are not
 code-signed, so Windows may show an unknown-publisher warning.
 
 The installer generates the per-machine Plugin and registers a per-user login
-task with automatic restart. Import
-`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.json` into Figma once. Both x64
+task with automatic restart. Import both
+`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.json` and
+`%LOCALAPPDATA%\FigmaGateway\plugin\manifest.dev.json` into Figma once. Both x64
 and ARM64 installers are published. Each installer includes the matching
 Node.js runtime and its license, so a separate Node.js installation is not
 required.
@@ -131,9 +132,20 @@ figma-gateway daemon start
 figma-gateway daemon uninstall --confirm
 ```
 
-## Build and register the local plugin
+## Build and register the local plugins
 
-The single development manifest supports Figma Design, FigJam, Figma Slides, Dev Mode inspection, Figma Buzz, and Motion in Figma Design.
+Figma Gateway has one product identity, runtime, daemon, and CLI. Its local
+build emits two registrations because Figma does not allow `figjam` and `dev`
+in the same manifest:
+
+- `manifest.json`: Figma Design, FigJam, Slides, Buzz, Motion, and text review
+- `manifest.dev.json`: Dev Mode inspect, Codegen, and Figma for VS Code
+
+Both registrations connect to the same `shared` gateway instance. The manifests
+enable every public permission and capability that Figma exposes to local
+development plugins, plus proposed and private-plugin APIs. Figma partner-only
+APIs, account permissions, plan restrictions, and each editor's read/write
+rules still apply.
 
 Generate or refresh the per-machine Plugin:
 
@@ -141,9 +153,9 @@ Generate or refresh the per-machine Plugin:
 figma-gateway plugin build
 ```
 
-The command returns a manifest path under the current user's application data
-directory. In Figma Desktop, choose Plugins > Development > Import plugin from
-manifest..., then select that file. This is a one-time manual registration.
+The command returns both manifest paths under the current user's application
+data directory. In Figma Desktop, choose Plugins > Development > Import plugin
+from manifest..., then select each file. This is a one-time manual registration.
 Run Plugins > Development > Figma Gateway in each file that should connect.
 
 Automatic Plugin startup and Figma window control are macOS-only. On Windows,
@@ -168,6 +180,39 @@ Select a connected session before using the Plugin API:
 ```bash
 figma-gateway plugin node SESSION_KEY 2429:67732 --depth 1
 
+# Search the generated one-to-one command catalog and inspect exact parameters.
+figma-gateway plugin api list --search variable
+figma-gateway plugin api describe figma.variables.create-variable
+
+# Every root API and namespace API has its own command ID and named parameters.
+figma-gateway plugin api figma.editor-type SESSION_KEY
+figma-gateway plugin api figma.get-node-by-id-async SESSION_KEY \
+  --params '{"id":"2429:67732"}' --confirm
+figma-gateway plugin api figma.variables.create-variable SESSION_KEY \
+  --params '{"name":"Spacing","collectionId":"VariableCollectionId:1:2","resolvedType":"FLOAT"}' \
+  --confirm
+
+# Live Plugin objects are explicit values; no JavaScript is evaluated.
+figma-gateway plugin api figma.group SESSION_KEY \
+  --params '{"nodes":[{"$node":"1:2"},{"$node":"1:3"}],"parent":{"$figma":"currentPage"}}' \
+  --confirm
+
+# Returned host objects include a session-scoped $handle. Use the command for
+# that exact interface to read, call, or write its members.
+figma-gateway plugin api figma.current-page SESSION_KEY
+figma-gateway plugin api page-node.selection SESSION_KEY \
+  --target '{"$handle":"h1"}' --value '[{"$node":"1:2"}]' --confirm
+figma-gateway plugin api layout-mixin.resize SESSION_KEY \
+  --target '{"$node":"1:2"}' --params '{"width":320,"height":240}' --confirm
+
+# Event and predicate APIs accept code-free persistent callbacks.
+figma-gateway plugin callback create SESSION_KEY --return '[]'
+figma-gateway plugin api figma.codegen.on SESSION_KEY \
+  --params '{"type":"generate","callback":{"$handle":"h2"}}' --overload 1 --confirm
+figma-gateway plugin callback events SESSION_KEY h2
+
+# Arbitrary execution remains available as an explicit escape hatch, but the
+# generated Plugin API commands above do not depend on it.
 figma-gateway plugin exec SESSION_KEY \
   --code 'return { page: figma.currentPage.name, selection: figma.currentPage.selection.map(node => node.id) }' \
   --confirm
@@ -179,7 +224,22 @@ figma-gateway plugin export SESSION_KEY 2429:67732 out/animation.mp4 \
   --format MP4 --scale 1 --fps 30 --quality HIGH
 ```
 
-Arbitrary plugin code and non-GET REST requests require explicit confirmation.
+The command catalog is generated from the pinned official
+`@figma/plugin-typings` package. It currently contains 1,231 unique commands
+covering all 1,268 method, property, overload, index, and documented global
+declarations across 252 interfaces plus `__html__` and `__uiFiles__`.
+`npm run verify:plugin-api` fails when the typings and the
+committed catalog differ, and the test suite independently proves that every
+declaration is represented.
+
+Plugin API method calls and writes, arbitrary plugin code, and non-GET REST
+requests require explicit confirmation. Named `--params` are ordered according
+to the selected official overload; use `--overload N` when overload parameter
+names overlap. Values support `{"$handle":"HANDLE"}` for live objects and
+callbacks, `{"$node":"NODE_ID"}`, `{"$figma":"PATH"}`, and
+`{"$base64":"ENCODED_BYTES"}`. Handles belong to one running Plugin session
+and expire when that session ends. Dev Mode remains read-only for document
+contents because Figma enforces that boundary.
 
 ## Logs and telemetry
 
@@ -246,6 +306,12 @@ Large responses can be saved under the caller's working directory with `--save`.
 | `get_node` | Serialize a node recursively |
 | `save_screenshots` | Export PNG, JPG, SVG, PDF, MP4, GIF, or WebM files |
 | `execute_plugin_code` | Execute explicitly confirmed JavaScript against the local Plugin API session |
+| `plugin_api_list` | List exact command IDs generated from the pinned official typings |
+| `plugin_api_describe` | Show one command's interface, types, and overload parameters |
+| `plugin_api_invoke` | Invoke a cataloged API command without evaluating JavaScript |
+| `plugin_callback_create` | Create a code-free callback with a fixed JSON return value |
+| `plugin_callback_events` | Read and optionally retain the callback's recorded calls |
+| `plugin_api_get`, `plugin_api_call`, `plugin_api_set`, `plugin_api_callback` | Legacy raw-path compatibility tools |
 | `figma_rest_request` | Call an official REST `/v1` or `/v2` endpoint |
 | `figma_auth_status` | Report credential configuration without exposing values |
 | `get_comments` | Retrieve file comments and optionally select one comment |

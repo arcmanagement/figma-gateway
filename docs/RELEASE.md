@@ -28,16 +28,17 @@ is reachable or when the value is missing.
 The release workflow scans every reachable commit. It intentionally fails on
 the private repository because that history is not a publication source.
 
-## Publish v1.0.0
+## Publish a release
 
-1. Verify that the public `main` commit is the intended clean initial commit.
-2. Create and push the matching `v1.0.0` tag.
-3. Wait for both Windows installer jobs and the release job to finish.
-4. Test the macOS package on a clean user account and both Windows installers
+1. Verify that the public `main` commit is descended from the approved public root.
+2. Update `package.json` and `npm-shrinkwrap.json` to the intended version.
+3. Create and push the matching `v<version>` tag.
+4. Wait for both Windows installer jobs and the release job to finish.
+5. Test the macOS package on a clean user account and both Windows installers
    on their matching architectures.
 
 The GitHub Release publishes unsigned x64 and ARM64 Windows installers. WinGet
-distribution is outside the v1.0.0 scope because this release does not have the
+distribution is outside the current scope because releases do not have the
 required code-signing certificate.
 
 ## Update the Homebrew Formula

@@ -1,4 +1,5 @@
 import { serializeNode, toSerializable } from "./serialize";
+import { PluginApiDispatcher } from "./api-dispatch";
 
 declare const __GATEWAY_SECRET__: string;
 declare const __GATEWAY_INSTANCE__: string;
@@ -6,11 +7,12 @@ declare const __GATEWAY_INSTANCE__: string;
 type IncomingRequest = {
   type: "request";
   id: string;
-  operation: "get_node" | "export" | "execute";
+  operation: "get_node" | "export" | "execute" | "api";
   payload: Record<string, unknown>;
 };
 
 const sessionKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const pluginApi = new PluginApiDispatcher(figma, { __html__, __uiFiles__ });
 
 figma.showUI(__html__, { width: 320, height: 120 });
 
@@ -108,6 +110,18 @@ async function execute(payload: Record<string, unknown>) {
   return toSerializable(result);
 }
 
+if (figma.editorType === "dev" && figma.mode === "codegen") {
+  figma.codegen.on("generate", ({ node }) => [{
+    title: "Figma Gateway",
+    language: "JSON",
+    code: JSON.stringify(serializeNode(node), null, 2),
+  }]);
+}
+
+if (figma.mode === "textreview") {
+  figma.on("textreview", () => []);
+}
+
 figma.ui.onmessage = async (message: IncomingRequest) => {
   if (!message || message.type !== "request") return;
   try {
@@ -115,6 +129,19 @@ figma.ui.onmessage = async (message: IncomingRequest) => {
     if (message.operation === "get_node") result = await getNode(message.payload);
     else if (message.operation === "export") result = await exportNode(message.payload);
     else if (message.operation === "execute") result = await execute(message.payload);
+    else if (message.operation === "api") {
+      result = await pluginApi.dispatch(message.payload as {
+        action: "get" | "call" | "set" | "indexGet" | "indexSet" | "globalGet" | "callback" | "callbackEvents";
+        path?: string;
+        args?: unknown[];
+        value?: unknown;
+        target?: unknown;
+        code?: string;
+        returnValue?: unknown;
+        callbackHandle?: string;
+        clear?: boolean;
+      });
+    }
     else throw new Error(`Unsupported operation: ${String(message.operation)}`);
     figma.ui.postMessage({ type: "response", id: message.id, ok: true, result });
   } catch (error) {

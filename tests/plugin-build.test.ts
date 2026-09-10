@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(import.meta.dirname, "..");
-test("Plugin build enforces the canonical shared artifact identity and all surfaces", async (context) => {
+test("Plugin build exposes all surfaces through compatible manifests and one gateway instance", async (context) => {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "figma-gateway-build-"));
   context.after(async () => {
     await rm(fixture, { recursive: true, force: true });
@@ -24,6 +24,10 @@ test("Plugin build enforces the canonical shared artifact identity and all surfa
     path.join(fixture, "plugin", "dist", "shared", "manifest.json"),
     "utf8",
   ));
+  const devManifest = JSON.parse(await readFile(
+    path.join(fixture, "plugin", "dist", "shared", "manifest.dev.json"),
+    "utf8",
+  ));
   const ui = await readFile(
     path.join(fixture, "plugin", "dist", "shared", "ui.html"),
     "utf8",
@@ -34,9 +38,19 @@ test("Plugin build enforces the canonical shared artifact identity and all surfa
   );
   assert.equal(manifest.name, "Figma Gateway");
   assert.equal(manifest.id, "figma-gateway-shared-design");
-  assert.deepEqual(manifest.editorType, ["figma", "figjam", "slides", "dev", "buzz"]);
-  assert.deepEqual(manifest.capabilities, ["inspect"]);
-  assert.deepEqual(manifest.permissions, []);
+  assert.deepEqual(manifest.editorType, ["figma", "figjam", "slides", "buzz"]);
+  assert.deepEqual(manifest.capabilities, ["textreview"]);
+  assert.deepEqual(manifest.permissions, [
+    "currentuser", "activeusers", "fileusers", "payments", "teamlibrary",
+  ]);
+  assert.equal(manifest.enableProposedApi, true);
+  assert.equal(manifest.enablePrivatePluginApi, true);
+  assert.equal(devManifest.name, "Figma Gateway");
+  assert.equal(devManifest.id, "figma-gateway-shared-dev");
+  assert.deepEqual(devManifest.editorType, ["dev"]);
+  assert.deepEqual(devManifest.capabilities, ["inspect", "codegen", "vscode"]);
+  assert.deepEqual(devManifest.codegenLanguages, [{ label: "JSON", value: "json" }]);
+  assert.match(code, /codegen\.on\("generate"/);
   assert.match(ui, /textContent = "Checking connection…"/);
   assert.match(ui, /message\.type === "connected"/);
   assert.match(ui, /textContent = "Connected"/);

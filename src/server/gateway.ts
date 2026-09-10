@@ -11,6 +11,7 @@ import type {
   RpcRequest,
   RpcResponse,
 } from "../shared/protocol.js";
+import { resolvePluginApiInvocation } from "../shared/plugin-api-catalog.js";
 import { safeOutputPath } from "./safe-path.js";
 import { AuditLogger, type AuditWriter } from "./audit-log.js";
 
@@ -26,6 +27,13 @@ const AUDIT_TOOLS = new Set([
   "list_files",
   "get_node",
   "execute_plugin_code",
+  "plugin_api_get",
+  "plugin_api_call",
+  "plugin_api_set",
+  "plugin_api_callback",
+  "plugin_api_invoke",
+  "plugin_callback_create",
+  "plugin_callback_events",
   "save_screenshots",
 ]);
 
@@ -181,6 +189,64 @@ export class GatewayHub {
       } else if (tool === "execute_plugin_code") {
         if (args.confirm !== true) throw new Error("execute_plugin_code requires confirm: true");
         result = await this.requestPlugin(String(args.fileKey || ""), "execute", args);
+      } else if (tool === "plugin_api_get") {
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "get",
+          path: args.path,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_call") {
+        if (args.confirm !== true) throw new Error("plugin_api_call requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "call",
+          path: args.path,
+          args: args.args,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_set") {
+        if (args.confirm !== true) throw new Error("plugin_api_set requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "set",
+          path: args.path,
+          value: args.value,
+          target: args.target,
+        });
+      } else if (tool === "plugin_api_callback") {
+        if (args.confirm !== true) throw new Error("plugin_api_callback requires confirm: true");
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "callback",
+          code: args.code,
+        });
+      } else if (tool === "plugin_api_invoke") {
+        const invocation = resolvePluginApiInvocation({
+          apiId: String(args.apiId || ""),
+          params: args.params,
+          args: args.args,
+          target: args.target,
+          value: args.value,
+          hasValue: Object.hasOwn(args, "value"),
+          key: typeof args.key === "string" ? args.key : undefined,
+          overload: typeof args.overload === "number" ? args.overload : undefined,
+          confirm: args.confirm === true,
+        });
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: invocation.operation,
+          path: invocation.path,
+          args: invocation.args,
+          target: invocation.target,
+          value: invocation.value,
+        });
+      } else if (tool === "plugin_callback_create") {
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "callback",
+          returnValue: args.returnValue,
+        });
+      } else if (tool === "plugin_callback_events") {
+        result = await this.requestPlugin(String(args.fileKey || ""), "api", {
+          action: "callbackEvents",
+          callbackHandle: args.callbackHandle,
+          clear: args.clear,
+        });
       } else if (tool === "save_screenshots") result = await this.saveScreenshots(args, cwd);
       else throw new Error(`Unknown plugin tool: ${tool}`);
       success = true;

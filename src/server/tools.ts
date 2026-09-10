@@ -2,6 +2,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GatewayHub } from "./gateway.js";
 import { credentialStatus, figmaRestRequest } from "./rest.js";
+import {
+  listPluginApiEntries,
+  pluginApiEntry,
+  PLUGIN_API_COMMAND_COUNT,
+  PLUGIN_API_DECLARATION_COUNT,
+  PLUGIN_API_INTERFACE_COUNT,
+  PLUGIN_API_GLOBAL_COUNT,
+  PLUGIN_API_TYPINGS_VERSION,
+} from "../shared/plugin-api-catalog.js";
 
 function text(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -53,6 +62,98 @@ export function registerTools(server: McpServer, hub: GatewayHub): void {
       confirm: z.literal(true),
     },
   }, async (args) => text(await hub.call("execute_plugin_code", args)));
+
+  server.registerTool("plugin_api_get", {
+    description: "Read any serializable property from the Figma Plugin API by path.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      target: z.unknown().optional(),
+    },
+  }, async (args) => text(await hub.call("plugin_api_get", args)));
+
+  server.registerTool("plugin_api_call", {
+    description: "Call any Figma Plugin API method by path. Live Plugin objects can be passed as {$node: id} or {$figma: path}, and bytes as {$base64: value}.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      args: z.array(z.unknown()).optional(),
+      target: z.unknown().optional(),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_call", args)));
+
+  server.registerTool("plugin_api_set", {
+    description: "Set any writable Figma Plugin API property by path. Live Plugin objects can be passed as {$node: id} or {$figma: path}.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      path: z.string().min(1),
+      value: z.unknown(),
+      target: z.unknown().optional(),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_set", args)));
+
+  server.registerTool("plugin_api_callback", {
+    description: "Create a persistent callback handle for event-based Figma Plugin APIs. The callback receives figma, event, args, and serialize.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      code: z.string().min(1),
+      confirm: z.literal(true),
+    },
+  }, async (args) => text(await hub.call("plugin_api_callback", args)));
+
+  server.registerTool("plugin_api_list", {
+    description: "List the generated one-to-one CLI command catalog for the official Figma Plugin API typings.",
+    inputSchema: {
+      interface: z.string().optional(),
+      search: z.string().optional(),
+    },
+  }, async (filters) => text({
+    typingsVersion: PLUGIN_API_TYPINGS_VERSION,
+    interfaceCount: PLUGIN_API_INTERFACE_COUNT,
+    globalCount: PLUGIN_API_GLOBAL_COUNT,
+    declarationCount: PLUGIN_API_DECLARATION_COUNT,
+    commandCount: PLUGIN_API_COMMAND_COUNT,
+    commands: listPluginApiEntries(filters),
+  }));
+
+  server.registerTool("plugin_api_describe", {
+    description: "Describe one exact Figma Plugin API CLI command, including overloads and named parameters.",
+    inputSchema: { apiId: z.string().min(1) },
+  }, async ({ apiId }) => text(pluginApiEntry(apiId)));
+
+  server.registerTool("plugin_api_invoke", {
+    description: "Invoke one exact command ID from the generated official Figma Plugin API catalog without evaluating JavaScript.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      apiId: z.string().min(1),
+      params: z.record(z.unknown()).optional(),
+      args: z.array(z.unknown()).optional(),
+      target: z.unknown().optional(),
+      value: z.unknown().optional(),
+      key: z.string().optional(),
+      overload: z.number().int().positive().optional(),
+      confirm: z.boolean().optional(),
+    },
+  }, async (args) => text(await hub.call("plugin_api_invoke", args)));
+
+  server.registerTool("plugin_callback_create", {
+    description: "Create a persistent, code-free callback handle that records calls and returns a fixed JSON value.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      returnValue: z.unknown().optional(),
+    },
+  }, async (args) => text(await hub.call("plugin_callback_create", args)));
+
+  server.registerTool("plugin_callback_events", {
+    description: "Read recorded calls for a code-free Plugin API callback handle.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      callbackHandle: z.string().min(1),
+      clear: z.boolean().optional(),
+    },
+  }, async (args) => text(await hub.call("plugin_callback_events", args)));
 
   server.registerTool("figma_rest_request", {
     description: "Call any official Figma REST v1/v2 endpoint. Non-GET methods require confirm=true. OAuth, personal, and plan access tokens are supported.",

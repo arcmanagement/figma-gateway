@@ -1,12 +1,12 @@
 {
   "name": "@arcmanagement/figma-gateway",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@arcmanagement/figma-gateway",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "license": "MIT",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.26.0",
@@ -19,7 +19,7 @@
         "figma-gateway-mcp": "dist/server/index.js"
       },
       "devDependencies": {
-        "@figma/plugin-typings": "^1.130.0",
+        "@figma/plugin-typings": "1.138.0",
         "@types/node": "^22.0.0",
         "@types/ws": "^8.5.0",
         "tsx": "^4.20.0",
@@ -446,9 +446,9 @@
       }
     },
     "node_modules/@figma/plugin-typings": {
-      "version": "1.134.0",
-      "resolved": "https://registry.npmjs.org/@figma/plugin-typings/-/plugin-typings-1.134.0.tgz",
-      "integrity": "sha512-e0JSSt7lczdi748/NLVEb7rhf/PG1IZyzieMiQ1AsaPN+A+sqvyYlIfxjzodPKrcdc9Pw9ZVjcHsT36oU744IA==",
+      "version": "1.138.0",
+      "resolved": "https://registry.npmjs.org/@figma/plugin-typings/-/plugin-typings-1.138.0.tgz",
+      "integrity": "sha512-bLP9wRf8c0e4z5GbXpDUXd7YNPXEDpgyeMmTe8Lm4EWMU8JEO1DFRfj1NaucIeRSurbde8y7xS1jas60LTTDaw==",
       "dev": true,
       "license": "MIT License"
     },

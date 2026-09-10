@@ -1,6 +1,6 @@
 {
   "name": "@arcmanagement/figma-gateway",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -17,11 +17,13 @@
     "figma-gateway-mcp": "dist/server/index.js"
   },
   "scripts": {
+    "generate:plugin-api": "node scripts/generate-plugin-api-catalog.mjs",
+    "verify:plugin-api": "node scripts/generate-plugin-api-catalog.mjs --check",
     "build": "npm run build:server",
     "build:server": "tsc -p tsconfig.json && node scripts/make-executable.mjs",
     "build:plugin": "node scripts/build-plugin.mjs",
     "cli": "node dist/cli/index.js",
-    "check": "tsc -p tsconfig.json --noEmit && tsc -p plugin/tsconfig.json --noEmit",
+    "check": "npm run verify:plugin-api && tsc -p tsconfig.json --noEmit && tsc -p plugin/tsconfig.json --noEmit",
     "test": "node --import tsx --test tests/**/*.test.ts",
     "test:python": "python3 -m unittest discover -s tests -p 'test_*.py'",
     "verify:source": "node scripts/verify-public-source.mjs",
@@ -63,7 +65,7 @@
     "qs": "^6.16.0"
   },
   "devDependencies": {
-    "@figma/plugin-typings": "^1.130.0",
+    "@figma/plugin-typings": "1.138.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "tsx": "^4.20.0",

@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -56,6 +57,36 @@ class RegisterPluginTest(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Plugin build output is missing", result.stderr)
+
+    def test_default_registration_reports_standard_and_dev_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = pathlib.Path(directory) / "plugin"
+            plugin.mkdir()
+            (plugin / "code.js").write_text("", encoding="utf-8")
+            (plugin / "ui.html").write_text("", encoding="utf-8")
+            for file_name, name, plugin_id in (
+                ("manifest.json", "Figma Gateway", "figma-gateway-shared-design"),
+                ("manifest.dev.json", "Figma Gateway", "figma-gateway-shared-dev"),
+            ):
+                (plugin / file_name).write_text(json.dumps({
+                    "name": name,
+                    "id": plugin_id,
+                    "main": "code.js",
+                    "ui": "ui.html",
+                }), encoding="utf-8")
+            result = subprocess.run(
+                ["python3", str(ROOT / "scripts" / "register-plugin.py"), "--json"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={**os.environ, "FIGMA_GATEWAY_PLUGIN_DIR": str(plugin)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual([item["id"] for item in payload["manifests"]], [
+                "figma-gateway-shared-design",
+                "figma-gateway-shared-dev",
+            ])
 
 
 if __name__ == "__main__":
