@@ -77,6 +77,38 @@ signed and Apple-notarized background application and both CLI entrypoints.
 Installation generates the per-machine Plugin and registers the daemon as a
 login service. Homebrew prints both manifest paths to import into Figma once.
 
+### Register Figma Gateway in Figma Desktop
+
+The installer builds two local development-plugin registrations. Import both
+once on each computer:
+
+1. Open Figma Desktop.
+2. Choose **Plugins > Development > Import plugin from manifest...**.
+3. In the file picker, press **Command-Shift-G**, enter the first path below,
+   and select `manifest.json`:
+
+   ```text
+   ~/Library/Application Support/Figma Gateway/plugin/manifest.json
+   ```
+
+4. Choose **Plugins > Development > Import plugin from manifest...** again.
+5. Press **Command-Shift-G**, enter the second path, and select
+   `manifest.json`:
+
+   ```text
+   ~/Library/Application Support/Figma Gateway/plugin/dev/manifest.json
+   ```
+
+The first registration is used in Figma Design, FigJam, Slides, Buzz, Motion,
+and text review. The second is used in Dev Mode inspect, Codegen, and Figma for
+VS Code. They are two entrypoints to the same local Figma Gateway and both are
+required for full editor coverage.
+
+Registration is required only once per computer. After registering, open the
+target file and run **Plugins > Development > Figma Gateway**. The Plugin stays
+connected while it is running in that file; the background gateway daemon is
+started automatically at login.
+
 The legacy Formula remains available for compatibility. It requires
 `figma-gateway setup` after installation and does not provide the Developer ID
 signed distribution:
@@ -101,6 +133,12 @@ task with automatic restart. Import both
 and ARM64 installers are published. Each installer includes the matching
 Node.js runtime and its license, so a separate Node.js installation is not
 required.
+
+To register them, open Figma Desktop and choose **Plugins > Development >
+Import plugin from manifest...**. Select the first manifest, repeat the command,
+and select the Dev Mode manifest. Registration is required only once per
+computer. Run **Plugins > Development > Figma Gateway** in each file that
+should connect.
 
 ## Install from source
 
@@ -336,7 +374,33 @@ bash -c 'source scripts/common.sh; python3 scripts/bridge-call.py list_files "{}
 
 ## Export structures and images
 
-The export helper opens a Figma URL, starts the local development plugin, retrieves the requested node, writes the result, and restores the previous application state.
+Figma Gateway can export nodes directly from the CLI to files on local disk.
+The exported binary does not have to be returned through an MCP tool response
+or placed in a model's conversation context, avoiding MCP client response-size
+and context limits for large assets. Because this uses the local Plugin API's
+`exportAsync`, Figma REST API rate limits and the REST image export's
+32-megapixel ceiling do not apply. Figma permissions, editor capabilities,
+available memory, and format-specific Plugin API constraints still apply.
+
+Export one node from an already connected Plugin session:
+
+```bash
+figma-gateway plugin files
+figma-gateway plugin export SESSION_KEY 2429:67732 out/screen.png \
+  --format PNG --scale 4
+figma-gateway plugin export SESSION_KEY 2429:67732 out/document.pdf \
+  --format PDF
+figma-gateway plugin export SESSION_KEY 2429:67732 out/animation.mp4 \
+  --format MP4 --scale 1 --fps 30 --quality HIGH
+```
+
+Supported formats are PNG, JPG, SVG, PDF, MP4, GIF, and WebM. Video formats
+are available where the current Figma editor and node support Motion export.
+Output paths are confined to the directory where the CLI was invoked.
+
+The URL-based export helper opens a Figma URL, starts the local development
+Plugin, retrieves the requested node, writes the result, and restores the
+previous application state:
 
 ```bash
 ./scripts/export.sh '<FIGMA_URL>' --scale 2 --format PNG --out ./out
@@ -344,7 +408,9 @@ The export helper opens a Figma URL, starts the local development plugin, retrie
 ./scripts/export.sh '<SECTION_OR_FRAME_URL>' --structure --out ./out
 ```
 
-`--structure` writes the root, descendant sections, and outermost frames as separate images, plus `structure.json` and `manifest.json`. FigJam and Slides are supported. Output paths are restricted to the caller's working directory.
+`--structure` writes the root, descendant sections, and outermost frames as
+separate images, plus `structure.json` and `manifest.json`. FigJam and Slides
+are supported.
 
 The REST-only fallback is intended for a small number of nodes when Figma Desktop is unavailable:
 
