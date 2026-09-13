@@ -37,6 +37,16 @@ export function registerTools(server: McpServer, hub: GatewayHub): void {
     },
   }, async (args) => text(await hub.call("get_node", args)));
 
+  server.registerTool("save_node_structure", {
+    description: "Read a large Figma subtree in bounded Plugin chunks and atomically save the reconstructed JSON below the caller working directory.",
+    inputSchema: {
+      fileKey: z.string().min(1),
+      nodeId: z.string().min(1),
+      outputPath: z.string().min(1),
+      chunkSize: z.number().int().min(1).max(1000).default(200),
+    },
+  }, async (args) => text(await hub.call("save_node_structure", args)));
+
   server.registerTool("save_screenshots", {
     description: "Export one or more Figma nodes with Plugin API exportAsync. Supports still images, PDFs, and Motion video formats.",
     inputSchema: {

@@ -148,6 +148,37 @@ class StructureExportTest(unittest.TestCase):
         self.assertEqual(plan["manifestVersion"], 3)
         self.assertEqual(plan["relationCount"], 0)
 
+    def test_merges_large_page_shards_in_original_child_order(self) -> None:
+        merged = self.module.merge_root_shards(
+            {
+                "id": "1:1",
+                "name": "Page",
+                "type": "PAGE",
+                "children": [
+                    {"id": "1:2", "name": "A", "type": "SECTION"},
+                    {"id": "1:3", "name": "B", "type": "FRAME"},
+                ],
+            },
+            [
+                {"id": "1:3", "name": "B", "type": "FRAME", "children": []},
+                {
+                    "id": "1:2",
+                    "name": "A",
+                    "type": "SECTION",
+                    "children": [{"id": "1:4", "name": "Screen", "type": "FRAME"}],
+                },
+            ],
+        )
+
+        self.assertEqual([child["id"] for child in merged["children"]], ["1:2", "1:3"])
+        self.assertEqual(merged["children"][0]["children"][0]["id"], "1:4")
+
+        with self.assertRaises(SystemExit):
+            self.module.merge_root_shards(
+                {"id": "1:1", "type": "PAGE", "children": [{"id": "1:2"}]},
+                [{"id": "wrong", "type": "SECTION"}],
+            )
+
     def test_structures_directed_connector_between_exported_frames(self) -> None:
         node = {
             "id": "1:1",
@@ -258,6 +289,123 @@ class StructureExportTest(unittest.TestCase):
         self.assertEqual(plan["root"]["type"], "FRAME")
         self.assertEqual(plan["frameCount"], 1)
         self.assertEqual([node["id"] for node in plan["nodes"]], ["1:1"])
+
+    def test_accepts_design_page_root_without_requesting_a_page_image(self) -> None:
+        page = {
+            "id": "834:29473",
+            "name": "⭐️Design Review",
+            "type": "PAGE",
+            "bounds": {"x": 0, "y": 0, "width": 2000, "height": 1200},
+            "children": [
+                {
+                    "id": "834:30000",
+                    "name": "Review section",
+                    "type": "SECTION",
+                    "bounds": {"x": 100, "y": 200, "width": 900, "height": 800},
+                    "children": [
+                        {
+                            "id": "834:30001",
+                            "name": "Screen A",
+                            "type": "FRAME",
+                            "bounds": {"x": 140, "y": 260, "width": 390, "height": 844},
+                            "children": [
+                                {"id": "834:30002", "name": "Layout", "type": "FRAME"}
+                            ],
+                        },
+                        {
+                            "id": "834:30003",
+                            "name": "Component",
+                            "type": "COMPONENT",
+                            "children": [
+                                {"id": "834:30004", "name": "Internal", "type": "FRAME"}
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "id": "834:30005",
+                    "name": "Screen B",
+                    "type": "FRAME",
+                    "bounds": {"x": 1100, "y": 200, "width": 390, "height": 844},
+                },
+                {
+                    "id": "834:30006",
+                    "name": "Open B",
+                    "type": "CONNECTOR",
+                    "connector": {
+                        "start": {"endpointNodeId": "834:30001"},
+                        "end": {"endpointNodeId": "834:30005"},
+                        "startStrokeCap": "NONE",
+                        "endStrokeCap": "ARROW_LINES",
+                    },
+                },
+            ],
+        }
+
+        plan = self.module.build_plan(page, "file-key", "PNG", 1, 2)
+
+        self.assertEqual(
+            [node["id"] for node in plan["nodes"]],
+            ["834:29473", "834:30000", "834:30001", "834:30005"],
+        )
+        self.assertEqual(plan["root"]["type"], "PAGE")
+        self.assertIsNone(plan["root"]["outputPath"])
+        self.assertNotIn(
+            "834:29473", [item["nodeId"] for item in plan["request"]["items"]]
+        )
+        self.assertEqual(plan["sectionCount"], 1)
+        self.assertEqual(plan["frameCount"], 2)
+        self.assertEqual(plan["root"]["childNodeIds"], ["834:30000", "834:30005"])
+        self.assertEqual(plan["nodes"][1]["parentNode"]["id"], "834:29473")
+        self.assertEqual(plan["nodes"][2]["parentExportNode"]["id"], "834:30000")
+        self.assertEqual(plan["nodes"][2]["relativeBounds"]["x"], 40)
+        self.assertEqual(plan["nodes"][3]["siblingOrder"], 2)
+        self.assertEqual(
+            [part["id"] for part in plan["nodes"][2]["scenePath"]],
+            ["834:29473", "834:30000", "834:30001"],
+        )
+        self.assertEqual(
+            [part["id"] for part in plan["nodes"][2]["exportPath"]],
+            ["834:29473", "834:30000", "834:30001"],
+        )
+        self.assertEqual(plan["relations"][0]["status"], "resolved")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            results = []
+            for item in plan["request"]["items"]:
+                output_path = output_dir / item["outputPath"]
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"image")
+                results.append(
+                    {
+                        "nodeId": item["nodeId"],
+                        "outputPath": str(output_path),
+                        "success": True,
+                    }
+                )
+            manifest = self.module.verify_export(
+                plan,
+                {"succeeded": len(results), "failed": 0, "results": results},
+                output_dir,
+            )
+
+        self.assertIsNone(manifest["root"]["export"])
+        self.assertEqual(len(manifest["results"]), 3)
+        self.assertTrue(all(item["bytesWritten"] == 5 for item in manifest["results"]))
+        self.assertEqual(manifest["typeCounts"], {"PAGE": 1, "SECTION": 1, "FRAME": 2})
+
+        capped = self.module.build_plan(
+            page, "file-key", "PNG", 1, 2, max_overview_pixels=1_000_000
+        )
+        section_request = next(
+            item for item in capped["request"]["items"] if item["nodeId"] == "834:30000"
+        )
+        frame_request = next(
+            item for item in capped["request"]["items"] if item["nodeId"] == "834:30001"
+        )
+        self.assertLess(section_request["scale"], 2)
+        self.assertEqual(frame_request["scale"], 2)
 
     def test_exports_outermost_frames_but_omits_their_internal_frames(self) -> None:
         plan = self.module.build_plan(

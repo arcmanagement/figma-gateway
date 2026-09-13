@@ -305,6 +305,63 @@ test("CLI passes Motion video export settings to the Plugin", async (context) =>
   });
 });
 
+test("CLI saves large structures through bounded chunks", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.FIGMA_GATEWAY_SECRET;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.FIGMA_GATEWAY_SECRET;
+    else process.env.FIGMA_GATEWAY_SECRET = originalSecret;
+  });
+  process.env.FIGMA_GATEWAY_SECRET = "shared-secret";
+  let request: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    request = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ ok: true, result: { nodeCount: 6487, chunkCount: 33 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await runCli([
+    "plugin", "structure", "large-session", "834:29473", "out/structure.json",
+    "--chunk-size", "200",
+  ], () => undefined);
+  const rpc = request as { tool?: string; arguments?: Record<string, unknown> };
+  assert.equal(rpc.tool, "save_node_structure");
+  assert.deepEqual(rpc.arguments, {
+    fileKey: "large-session",
+    nodeId: "834:29473",
+    outputPath: "out/structure.json",
+    chunkSize: 200,
+  });
+});
+
+test("CLI exports a saved batch request through the direct gateway RPC", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.FIGMA_GATEWAY_SECRET;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.FIGMA_GATEWAY_SECRET;
+    else process.env.FIGMA_GATEWAY_SECRET = originalSecret;
+  });
+  process.env.FIGMA_GATEWAY_SECRET = "shared-secret";
+  let request: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    request = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ ok: true, result: { succeeded: 1, failed: 0 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await runCli([
+    "plugin", "export-batch", "large-session", "--request",
+    JSON.stringify({ fileKey: "stale", items: [{ nodeId: "1:2", outputPath: "a.png" }] }),
+  ], () => undefined);
+  const rpc = request as { tool?: string; arguments?: Record<string, unknown> };
+  assert.equal(rpc.tool, "save_screenshots");
+  assert.equal(rpc.arguments?.fileKey, "large-session");
+});
+
 test("CLI lists and focuses Figma Desktop windows", async () => {
   const calls: Array<{ command: string; args?: readonly string[] }> = [];
   const fakeSpawn = ((command: string, args?: readonly string[]) => {
@@ -313,7 +370,11 @@ test("CLI lists and focuses Figma Desktop windows", async () => {
     if (command === "osascript" && args?.includes("Product_v1_ScreenDesign")) {
       return { status: 0, stdout: "", stderr: "" };
     }
-    return { status: 0, stdout: "Icon Master\nProduct_v1_ScreenDesign\n", stderr: "" };
+    return {
+      status: 0,
+      stdout: "Icon Master\t10\t20\t1200\t800\nProduct_v1_ScreenDesign\t30\t40\t1200\t800\n",
+      stderr: "",
+    };
   }) as unknown as typeof spawnSync;
   let listed = "";
   await runCli([
@@ -329,6 +390,88 @@ test("CLI lists and focuses Figma Desktop windows", async () => {
   assert.equal(JSON.parse(focused).app, "/Applications/Figma.app");
   assert.equal(JSON.parse(focused).window, "Product_v1_ScreenDesign");
   assert.equal(calls.filter((call) => call.command === "osascript").length, 2);
+});
+
+test("CLI opens an isolated Figma window, switches mode, and cleans up only by operation receipt", async (context) => {
+  const originalSecret = process.env.FIGMA_GATEWAY_SECRET;
+  const originalStateDirectory = process.env.FIGMA_GATEWAY_WINDOW_STATE_DIR;
+  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "figma-gateway-windows-"));
+  const originalFetch = globalThis.fetch;
+  context.after(async () => {
+    if (originalSecret === undefined) delete process.env.FIGMA_GATEWAY_SECRET;
+    else process.env.FIGMA_GATEWAY_SECRET = originalSecret;
+    if (originalStateDirectory === undefined) delete process.env.FIGMA_GATEWAY_WINDOW_STATE_DIR;
+    else process.env.FIGMA_GATEWAY_WINDOW_STATE_DIR = originalStateDirectory;
+    globalThis.fetch = originalFetch;
+    await rm(stateDirectory, { recursive: true, force: true });
+  });
+  process.env.FIGMA_GATEWAY_SECRET = "shared-secret";
+  process.env.FIGMA_GATEWAY_WINDOW_STATE_DIR = stateDirectory;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    ok: true,
+    files: [{
+      instance: "shared",
+      fileKey: "managed-session",
+      fileName: "Product Workspace",
+      editorType: "dev",
+      editorMode: "inspect",
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  const calls: Array<{ command: string; args: readonly string[]; env?: NodeJS.ProcessEnv; input?: string }> = [];
+  const fakeSpawn = ((command: string, args: readonly string[] = [], options?: {
+    env?: NodeJS.ProcessEnv;
+    input?: string;
+  }) => {
+    calls.push({ command, args, env: options?.env, input: options?.input });
+    if (command === "pgrep") return { status: 0, stdout: "12345\n", stderr: "" };
+    if (command === "bash") return { status: 0, stdout: "==> Plugin connected\nSESSION_KEY=managed-session\n", stderr: "" };
+    if (command === "osascript" && args.length === 2) {
+      return { status: 0, stdout: "Existing File\t10\t20\t1200\t800\n", stderr: "" };
+    }
+    if (command === "osascript" && args.length === 5) {
+      return { status: 0, stdout: "Product Workspace\t40\t50\t1200\t800\n", stderr: "" };
+    }
+    return { status: 0, stdout: "", stderr: "" };
+  }) as unknown as typeof spawnSync;
+
+  let text = "";
+  await runCli([
+    "plugin", "connect",
+    "--url", "https://www.figma.com/design/abcdefghijklmnopqrstuv/Product%20Workspace",
+    "--mode", "dev",
+    "--window", "new",
+  ], (value) => { text += value; }, { spawnSync: fakeSpawn, platform: "darwin" });
+  const connected = JSON.parse(text);
+  assert.equal(connected.createdWindow, true);
+  assert.equal(connected.editorType, "dev");
+  assert.equal(connected.editorMode, "inspect");
+  assert.equal(connected.focusRestored, true);
+  assert.match(connected.operationId, /^op_/);
+  const launcher = calls.find((call) => call.command === "bash");
+  assert.equal(launcher?.env?.FIGMA_RESTORE_STATE, "1");
+  assert.equal(launcher?.env?.FIGMA_TARGET_WINDOW_X, "40");
+  assert.equal(launcher?.env?.FIGMA_TARGET_WINDOW_Y, "50");
+  assert.match(calls.find((call) => call.command === "osascript" && call.args.length === 5)?.input || "", /New Window command/);
+  assert.match(calls.find((call) => call.command === "osascript" && call.args.length === 8)?.input || "", /Design\/Dev Mode command/);
+
+  text = "";
+  await runCli([
+    "plugin", "cleanup", connected.operationId, "--confirm",
+  ], (value) => { text += value; }, { spawnSync: fakeSpawn, platform: "darwin" });
+  const cleaned = JSON.parse(text);
+  assert.equal(cleaned.operationId, connected.operationId);
+  assert.equal(cleaned.closedWindow.name, "Product Workspace");
+  assert.match(calls.findLast((call) => call.command === "osascript")?.input || "", /cannot be identified safely/);
+});
+
+test("CLI does not close a managed Figma window without explicit confirmation", async () => {
+  await assert.rejects(
+    runCli(["plugin", "cleanup", "op_00000000-0000-0000-0000-000000000000"], () => undefined, {
+      platform: "darwin",
+    }),
+    /requires --confirm/,
+  );
 });
 
 test("CLI dispatches one operation to multiple Figma sessions concurrently", async (context) => {

@@ -14,7 +14,8 @@
 #   ./export.sh '<Figma URL>' --out ~/Desktop
 #   ./export.sh '<URL>' --scale 4 --format PNG --out ./out
 #   ./export.sh '<URL>' --tree --out ~/Desktop
-#   ./export.sh '<SECTION or FRAME URL>' --structure --out ./out
+#   ./export.sh '<PAGE, SECTION or FRAME URL>' --structure --out ./out
+#   ./export.sh '<URL>' --session-key SESSION_KEY --structure --out ./out
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,8 +34,10 @@ OUT_DIR="$PWD"
 TREE=0
 STRUCTURE=0
 FILE_NAME=""
+SESSION_KEY=""
 OVERVIEW_SCALE=1
 DETAIL_SCALE=2
+MAX_OVERVIEW_PIXELS=8000000
 # Child node types treated as implementation-level details.
 CHILD_TYPES="SECTION,FRAME"
 
@@ -51,8 +54,10 @@ while [[ $# -gt 0 ]]; do
     --structure)       STRUCTURE=1; shift ;;
     --section-tree)    STRUCTURE=1; shift ;;
     --file-name)       FILE_NAME="$2"; shift 2 ;;
+    --session-key)     SESSION_KEY="$2"; shift 2 ;;
     --overview-scale)  OVERVIEW_SCALE="$2"; shift 2 ;;
     --detail-scale)    DETAIL_SCALE="$2"; shift 2 ;;
+    --max-overview-pixels) MAX_OVERVIEW_PIXELS="$2"; shift 2 ;;
     --child-types)     CHILD_TYPES="$2"; shift 2 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage 1 ;;
   esac
@@ -147,6 +152,8 @@ ORIGINAL_STATE="$(was_visible)"
 ORIGINAL_FRONTMOST_PID="$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>/dev/null || true)"
 PLAN_FILE=""
 RESULT_FILE=""
+REQUEST_FILE=""
+MANAGED_OPERATION_ID=""
 
 # Remove temporary files and restore app state for every exit path.
 restore() {
@@ -169,6 +176,11 @@ restore() {
 cleanup() {
   [[ -z "$PLAN_FILE" ]] || rm -f "$PLAN_FILE"
   [[ -z "$RESULT_FILE" ]] || rm -f "$RESULT_FILE"
+  [[ -z "$REQUEST_FILE" ]] || rm -f "$REQUEST_FILE"
+  if [[ -n "$MANAGED_OPERATION_ID" ]]; then
+    node "$SCRIPT_DIR/../dist/cli/index.js" plugin cleanup \
+      "$MANAGED_OPERATION_ID" --confirm >/dev/null 2>&1 || true
+  fi
   restore
   if [[ $BRIDGE_STARTED -eq 1 && -n "$BRIDGE_SERVER_PID" ]]; then
     kill "$BRIDGE_SERVER_PID" >/dev/null 2>&1 || true
@@ -180,7 +192,26 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+FILE_KEY="$SESSION_KEY"
+if [[ -n "$FILE_KEY" ]]; then
+  node "$SCRIPT_DIR/../dist/cli/index.js" plugin files \
+    | SESSION_KEY="$FILE_KEY" EXPECTED_FILE_NAME="$EXPECTED_FILE_NAME" python3 -c '
+import json, os, sys
+files = json.load(sys.stdin).get("files", [])
+matches = [item for item in files if item.get("fileKey") == os.environ["SESSION_KEY"]]
+if len(matches) != 1 or matches[0].get("fileName") != os.environ["EXPECTED_FILE_NAME"]:
+    raise SystemExit("ERROR: --session-key does not match the expected Figma file")
+'
+elif [[ "$FILE_KIND" == "design" ]]; then
+  echo "==> Opening managed Figma window"
+  CONNECTED="$(node "$SCRIPT_DIR/../dist/cli/index.js" plugin connect \
+    --url "$URL" --file-name "$EXPECTED_FILE_NAME" --mode dev --window new)"
+  FILE_KEY="$(printf '%s' "$CONNECTED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sessionKey"])')"
+  MANAGED_OPERATION_ID="$(printf '%s' "$CONNECTED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["operationId"])')"
+fi
+
 # Open without taking focus.
+if [[ -z "$FILE_KEY" ]]; then
 echo "==> Opening file"
 open -g -a "$APP" "$URL"
 for _ in $(seq 1 40); do
@@ -243,7 +274,6 @@ print(json.dumps([
 
 # Retry until the Plugin appears in the gateway after the file has loaded.
 echo "==> Starting Plugin"
-FILE_KEY=""
 LIST_FILES=""
 click_plugin_menu() {
   local status=0
@@ -314,27 +344,29 @@ if [[ -z "$FILE_KEY" ]]; then
   echo "ERROR: the Plugin in the target file did not connect to the gateway" >&2
   exit 1
 fi
+fi
 
 EXT="$(tr '[:upper:]' '[:lower:]' <<<"$FORMAT")"
 
 if [[ $STRUCTURE -eq 1 ]]; then
   mkdir -p "$OUT_DIR/sections" "$OUT_DIR/frames"
   [[ "$FILE_KIND" == "slides" ]] && mkdir -p "$OUT_DIR/slides"
-  echo "==> Discovering sections and outermost frames recursively"
-  NODE_JSON="$(bridge_call get_node "$(FK="$FILE_KEY" NI="$NODE_ID" python3 -c '
-import json, os
-print(json.dumps({"fileKey": os.environ["FK"], "nodeId": os.environ["NI"]}))
-')" 2>/dev/null)"
-  # Preserve raw structure data for Markdown generation and later analysis.
-  printf '%s' "$NODE_JSON" > "$OUT_DIR/structure.json"
+  echo "==> Discovering sections and outermost frames in bounded chunks"
+  (
+    cd "$OUT_DIR"
+    node "$SCRIPT_DIR/../dist/cli/index.js" plugin structure \
+      "$FILE_KEY" "$NODE_ID" structure.json --chunk-size 200 >/dev/null
+  )
   PLAN_FILE="$(mktemp "$OUT_DIR/.figma-structure-plan.XXXXXX")"
-  printf '%s' "$NODE_JSON" | python3 "$SCRIPT_DIR/structure-export.py" plan \
+  python3 "$SCRIPT_DIR/structure-export.py" plan \
     --file-key "$FILE_KEY" \
     --kind "$FILE_KIND" \
     --source-url "$URL" \
     --format "$FORMAT" \
     --overview-scale "$OVERVIEW_SCALE" \
-    --detail-scale "$DETAIL_SCALE" >"$PLAN_FILE"
+    --detail-scale "$DETAIL_SCALE" \
+    --max-overview-pixels "$MAX_OVERVIEW_PIXELS" \
+    <"$OUT_DIR/structure.json" >"$PLAN_FILE"
   ARGS="$(python3 -c '
 import json, sys
 print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["request"]))
@@ -390,7 +422,10 @@ fi
 
 echo "==> Exporting"
 RESULT_FILE="$(mktemp "$OUT_DIR/.figma-export-result.XXXXXX")"
-bridge_call save_screenshots "$ARGS" >"$RESULT_FILE"
+REQUEST_FILE="$(mktemp "$OUT_DIR/.figma-export-request.XXXXXX")"
+printf '%s' "$ARGS" >"$REQUEST_FILE"
+node "$SCRIPT_DIR/../dist/cli/index.js" plugin export-batch "$FILE_KEY" \
+  --request "@$REQUEST_FILE" >"$RESULT_FILE"
 RESULT="$RESULT_FILE" python3 <<'PY'
 import json, os, sys
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -12,8 +13,8 @@ from typing import Any
 
 
 EXPORT_TYPES = {"SECTION", "FRAME"}
-ROOT_TYPES = EXPORT_TYPES | {"GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE"}
-BOARD_ROOT_TYPES = ROOT_TYPES | {"PAGE"}
+ROOT_TYPES = EXPORT_TYPES | {"PAGE", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE"}
+BOARD_ROOT_TYPES = ROOT_TYPES
 SLIDES_ROOT_TYPES = {"PAGE", "SLIDE_GRID", "SLIDE_ROW", "SLIDE"}
 # Layout-only nodes that cannot be rendered by the gateway remain in the manifest.
 STRUCTURE_ONLY_ROOT_TYPES = {"PAGE", "SLIDE_GRID", "SLIDE_ROW"}
@@ -94,6 +95,22 @@ def unwrap_node(value: Any) -> dict[str, Any]:
     if not isinstance(node, dict):
         raise SystemExit("ERROR: node JSON does not contain a node")
     return node
+
+
+def merge_root_shards(root_data: Any, child_data: list[Any]) -> dict[str, Any]:
+    """Replace a shallow root's children with separately fetched full nodes."""
+    root = dict(unwrap_node(root_data))
+    children = root.get("children", [])
+    if not isinstance(children, list):
+        raise SystemExit("ERROR: shallow root children must be a list")
+    shards = {str(unwrap_node(value).get("id", "")): unwrap_node(value) for value in child_data}
+    expected_ids = [str(child.get("id", "")) for child in children if isinstance(child, dict)]
+    if not expected_ids or any(not node_id for node_id in expected_ids):
+        raise SystemExit("ERROR: shallow root has missing or invalid child IDs")
+    if set(expected_ids) != set(shards) or len(shards) != len(child_data):
+        raise SystemExit("ERROR: child shards do not exactly match the shallow root")
+    root["children"] = [shards[node_id] for node_id in expected_ids]
+    return root
 
 
 def node_reference(node: dict[str, Any]) -> dict[str, str]:
@@ -499,11 +516,14 @@ def build_plan(
     detail_scale: float,
     source_url: str | None = None,
     kind: str = "design",
+    max_overview_pixels: int | None = None,
 ) -> dict[str, Any]:
     if not file_key:
         raise SystemExit("ERROR: file key is required")
     if overview_scale <= 0 or detail_scale <= 0:
         raise SystemExit("ERROR: export scales must be greater than zero")
+    if max_overview_pixels is not None and max_overview_pixels <= 0:
+        raise SystemExit("ERROR: max overview pixels must be greater than zero")
 
     export_format = export_format.upper()
     if export_format not in {"PNG", "JPG", "SVG", "PDF"}:
@@ -530,11 +550,18 @@ def build_plan(
                 folder = "slides"
             else:
                 folder = "frames"
+            scale = detail_scale
+            if node["type"] == "SECTION" and max_overview_pixels is not None:
+                bounds = node.get("bounds")
+                if isinstance(bounds, dict):
+                    area = float(bounds.get("width", 0)) * float(bounds.get("height", 0))
+                    if area > 0:
+                        scale = min(scale, math.sqrt(max_overview_pixels / area))
+                        scale = max(0.01, math.floor(scale * 10_000) / 10_000)
             output_path = (
                 f"{folder}/{index:03d}_d{node['exportDepth']}_"
-                f"{slug(node['name'])}@{detail_scale:g}x.{extension}"
+                f"{slug(node['name'])}@{scale:g}x.{extension}"
             )
-            scale = detail_scale
         if output_path in output_paths:
             raise SystemExit(f"ERROR: duplicate output path: {output_path}")
         output_paths.add(output_path)
@@ -707,6 +734,7 @@ def create_parser() -> argparse.ArgumentParser:
     plan.add_argument("--format", default="PNG")
     plan.add_argument("--overview-scale", type=float, default=1)
     plan.add_argument("--detail-scale", type=float, default=2)
+    plan.add_argument("--max-overview-pixels", type=int)
     plan.add_argument("--source-url")
 
     select = subparsers.add_parser("select-file")
@@ -719,6 +747,9 @@ def create_parser() -> argparse.ArgumentParser:
     verify.add_argument("--result", required=True)
     verify.add_argument("--out", required=True)
     verify.add_argument("--manifest", required=True)
+
+    merge = subparsers.add_parser("merge-root-shards")
+    merge.add_argument("--child", action="append", required=True)
     return parser
 
 
@@ -738,8 +769,14 @@ def main() -> int:
             args.detail_scale,
             args.source_url,
             args.kind,
+            args.max_overview_pixels,
         )
         print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "merge-root-shards":
+        children = [read_json(child) for child in args.child]
+        print(json.dumps(merge_root_shards(json.load(sys.stdin), children), ensure_ascii=False))
         return 0
 
     plan = read_json(args.plan)

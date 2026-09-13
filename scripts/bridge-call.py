@@ -36,6 +36,12 @@ def main():
 
     tool = sys.argv[1]
     try:
+        timeout = float(os.environ.get("FIGMA_GATEWAY_CALL_TIMEOUT", "180"))
+    except ValueError:
+        sys.exit("ERROR: FIGMA_GATEWAY_CALL_TIMEOUT must be a number of seconds")
+    if timeout <= 0:
+        sys.exit("ERROR: FIGMA_GATEWAY_CALL_TIMEOUT must be greater than zero")
+    try:
         arguments = json.loads(sys.argv[2]) if len(sys.argv) >= 3 else {}
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: arguments are not valid JSON: {exc}")
@@ -55,10 +61,10 @@ def main():
         proc.stdin.write(json.dumps(message) + "\n")
         proc.stdin.flush()
 
-    def recv(rid, timeout=180):
+    def recv(rid, response_timeout=timeout):
         while True:
             try:
-                message = json.loads(lines.get(timeout=timeout))
+                message = json.loads(lines.get(timeout=response_timeout))
             except json.JSONDecodeError:
                 continue
             except queue.Empty:

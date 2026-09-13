@@ -223,6 +223,38 @@ figma-gateway plugin windows
 figma-gateway plugin files
 ```
 
+`plugin start --mode` selects the editor type that must connect; it does not
+change the open Figma window between Design and Dev Mode. For a managed macOS
+window lifecycle, use `plugin connect` instead:
+
+```bash
+figma-gateway plugin connect \
+  --url 'https://www.figma.com/design/FILE_KEY/FILE_NAME' \
+  --mode dev \
+  --file-name 'Exact Figma file name' \
+  --window new
+```
+
+`plugin connect` opens the file in a new Figma Desktop window, switches that
+window to the requested Design or Dev Mode, starts Figma Gateway, verifies the
+new Plugin session, and restores the application and Figma window that had
+focus before the command. It uses macOS accessibility actions and does not move
+the physical pointer. The JSON result includes an opaque `operationId` for the
+window created by that invocation.
+Use `--file-name` when the URL slug does not reproduce the exact file name.
+
+Close only that managed window when it is no longer needed:
+
+```bash
+figma-gateway plugin cleanup OPERATION_ID --confirm
+```
+
+Window receipts are stored locally with user-only permissions. Cleanup checks
+the recorded title, position, and size and refuses to close a window when it
+cannot identify the created window unambiguously. Pre-existing windows and
+Plugin sessions are never cleanup targets. Automatic window management is
+macOS-only; other platforms continue to require manual Plugin startup.
+
 Select a connected session before using the Plugin API:
 
 ```bash
@@ -372,6 +404,12 @@ Direct stdio access is available through the helper script:
 bash -c 'source scripts/common.sh; python3 scripts/bridge-call.py list_files "{}"'
 ```
 
+Large PAGE reads can take longer than the default 180 seconds. Set
+`FIGMA_GATEWAY_CALL_TIMEOUT` to raise the stdio helper timeout for that call.
+For pages too large to serialize in one request, fetch the root with `--depth 1`,
+fetch each direct child separately, then use `structure-export.py
+merge-root-shards --child ...` before planning the export.
+
 ## Export structures and images
 
 Figma Gateway can export nodes directly from the CLI to files on local disk.
@@ -386,6 +424,8 @@ Export one node from an already connected Plugin session:
 
 ```bash
 figma-gateway plugin files
+figma-gateway plugin structure SESSION_KEY 834:29473 out/structure.json \
+  --chunk-size 200
 figma-gateway plugin export SESSION_KEY 2429:67732 out/screen.png \
   --format PNG --scale 4
 figma-gateway plugin export SESSION_KEY 2429:67732 out/document.pdf \
@@ -393,6 +433,10 @@ figma-gateway plugin export SESSION_KEY 2429:67732 out/document.pdf \
 figma-gateway plugin export SESSION_KEY 2429:67732 out/animation.mp4 \
   --format MP4 --scale 1 --fps 30 --quality HIGH
 ```
+
+`plugin structure` is the large-document path. It traverses the subtree in
+bounded chunks, yields between chunks so the gateway remains responsive, and
+publishes the final JSON atomically. It refuses to overwrite an existing file.
 
 Supported formats are PNG, JPG, SVG, PDF, MP4, GIF, and WebM. Video formats
 are available where the current Figma editor and node support Motion export.
@@ -406,11 +450,22 @@ previous application state:
 ./scripts/export.sh '<FIGMA_URL>' --scale 2 --format PNG --out ./out
 ./scripts/export.sh '<FIGMA_URL>' --tree --out ./out
 ./scripts/export.sh '<SECTION_OR_FRAME_URL>' --structure --out ./out
+./scripts/export.sh '<FIGMA_URL>' --session-key SESSION_KEY --structure --out ./out
 ```
 
+For Design files, the helper creates a managed window with `plugin connect`,
+restores the previous app/window state, and cleans up only that created window.
+Pass an already dedicated `--session-key` to perform the export without opening
+or focusing any Figma window.
+
 `--structure` writes the root, descendant sections, and outermost frames as
-separate images, plus `structure.json` and `manifest.json`. FigJam and Slides
-are supported.
+separate images, plus `structure.json` and `manifest.json`. A Design `PAGE`
+may be the root; it remains in the manifest but is not sent to `exportAsync`,
+while its sections and outermost frames are exported. FigJam and Slides are
+supported. Section overview images are capped at 8 megapixels by default so a
+large canvas does not turn one preview into a blocking export; use
+`--max-overview-pixels` to change that cap. Frame exports keep the requested
+detail scale.
 
 The REST-only fallback is intended for a small number of nodes when Figma Desktop is unavailable:
 

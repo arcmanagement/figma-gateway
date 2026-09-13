@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { writeFile } from "node:fs/promises";
+import { link, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type {
   ConnectedFile,
@@ -26,6 +27,7 @@ type Pending = {
 const AUDIT_TOOLS = new Set([
   "list_files",
   "get_node",
+  "save_node_structure",
   "execute_plugin_code",
   "plugin_api_get",
   "plugin_api_call",
@@ -62,6 +64,21 @@ function authorized(actual: string, expected: string): boolean {
   const a = Buffer.from(actual);
   const b = Buffer.from(expected);
   return a.byteLength === b.byteLength && timingSafeEqual(a, b);
+}
+
+function countTreeNodes(root: Record<string, unknown>): number {
+  let count = 0;
+  const stack: Record<string, unknown>[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    count += 1;
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        if (child && typeof child === "object") stack.push(child as Record<string, unknown>);
+      }
+    }
+  }
+  return count;
 }
 
 export class GatewayHub {
@@ -186,6 +203,8 @@ export class GatewayHub {
       if (tool === "list_files") result = this.listFiles();
       else if (tool === "get_node") {
         result = await this.requestPlugin(String(args.fileKey || ""), "get_node", args);
+      } else if (tool === "save_node_structure") {
+        result = await this.saveNodeStructure(args, cwd);
       } else if (tool === "execute_plugin_code") {
         if (args.confirm !== true) throw new Error("execute_plugin_code requires confirm: true");
         result = await this.requestPlugin(String(args.fileKey || ""), "execute", args);
@@ -289,6 +308,93 @@ export class GatewayHub {
     }
     const succeeded = results.filter((item) => item.success).length;
     return { succeeded, failed: results.length - succeeded, results };
+  }
+
+  private async saveNodeStructure(args: Record<string, unknown>, cwd: string): Promise<unknown> {
+    const fileKey = String(args.fileKey || "");
+    const nodeId = String(args.nodeId || "");
+    const outputPath = String(args.outputPath || "");
+    const chunkSize = Number(args.chunkSize || 200);
+    if (!fileKey || !nodeId || !outputPath) {
+      throw new Error("fileKey, nodeId, and outputPath are required");
+    }
+    if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > 1000) {
+      throw new Error("chunkSize must be an integer from 1 to 1000");
+    }
+
+    type CursorItem = { nodeId: string; parentNodeId: string | null };
+    type ChunkNode = {
+      node: Record<string, unknown>;
+      parentNodeId: string | null;
+      childNodeIds: string[];
+    };
+    type Chunk = {
+      rootNodeId: string;
+      nodes: ChunkNode[];
+      cursor: CursorItem[];
+      done: boolean;
+    };
+
+    let cursor: CursorItem[] | undefined;
+    const records = new Map<string, ChunkNode>();
+    let chunks = 0;
+    do {
+      const chunk = await this.requestPlugin(fileKey, "get_node_chunk", {
+        nodeId,
+        chunkSize,
+        ...(cursor === undefined ? {} : { cursor }),
+      }) as Chunk;
+      chunks += 1;
+      if (chunk.rootNodeId !== nodeId || !Array.isArray(chunk.nodes) || !Array.isArray(chunk.cursor)) {
+        throw new Error("Plugin returned an invalid node chunk");
+      }
+      for (const record of chunk.nodes) {
+        const recordId = String(record.node?.id || "");
+        if (!recordId || records.has(recordId) || !Array.isArray(record.childNodeIds)) {
+          throw new Error("Plugin returned a duplicate or invalid chunk node");
+        }
+        records.set(recordId, record);
+      }
+      cursor = chunk.cursor;
+      if (chunk.done !== (cursor.length === 0) || chunks > 100_000) {
+        throw new Error("Plugin returned an invalid or non-terminating node cursor");
+      }
+    } while (cursor.length > 0);
+
+    const building = new Set<string>();
+    const build = (currentId: string): Record<string, unknown> => {
+      const record = records.get(currentId);
+      if (!record) throw new Error(`Node chunk is missing child: ${currentId}`);
+      if (building.has(currentId)) throw new Error(`Node chunk contains a cycle: ${currentId}`);
+      building.add(currentId);
+      const node = { ...record.node };
+      if (record.childNodeIds.length > 0) {
+        node.children = record.childNodeIds.map(build);
+      }
+      building.delete(currentId);
+      return node;
+    };
+    const structure = build(nodeId);
+    if (records.size === 0 || records.size !== countTreeNodes(structure)) {
+      throw new Error("Node chunk reconstruction did not consume every node");
+    }
+
+    const target = await safeOutputPath(cwd, outputPath, "outputPath");
+    const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
+    const body = `${JSON.stringify(structure)}\n`;
+    await writeFile(temporary, body, { flag: "wx", mode: 0o600 });
+    try {
+      await link(temporary, target);
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
+    return {
+      nodeId,
+      outputPath,
+      nodeCount: records.size,
+      chunkCount: chunks,
+      bytesWritten: Buffer.byteLength(body),
+    };
   }
 
   private requestPlugin(

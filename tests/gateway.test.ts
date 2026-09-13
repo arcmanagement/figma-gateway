@@ -98,6 +98,106 @@ test("routes plugin reads and writes exported bytes below caller cwd", async () 
   await hub.close();
 });
 
+test("saves a large node tree from bounded chunks without overwriting", async () => {
+  const port = await freePort();
+  const hub = new GatewayHub(port, "shared-secret", silentAudit);
+  assert.equal(await hub.start(), true);
+  const socket = await connectedPlugin(port, "shared-secret");
+  const chunkRequests: unknown[] = [];
+  socket.on("message", (data) => {
+    const request = JSON.parse(data.toString());
+    assert.equal(request.operation, "get_node_chunk");
+    chunkRequests.push(request.payload);
+    const first = request.payload.cursor === undefined;
+    socket.send(JSON.stringify({
+      type: "response",
+      id: request.id,
+      ok: true,
+      result: first
+        ? {
+            rootNodeId: "1:1",
+            nodes: [{
+              node: { id: "1:1", name: "Page", type: "PAGE" },
+              parentNodeId: null,
+              childNodeIds: ["1:2"],
+            }],
+            cursor: [{ nodeId: "1:2", parentNodeId: "1:1" }],
+            done: false,
+          }
+        : {
+            rootNodeId: "1:1",
+            nodes: [{
+              node: { id: "1:2", name: "Section", type: "SECTION" },
+              parentNodeId: "1:1",
+              childNodeIds: [],
+            }],
+            cursor: [],
+            done: true,
+          },
+    }));
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const cwd = await mkdtemp(path.join(tmpdir(), "figma-gateway-large-node-"));
+  const saved = await hub.call("save_node_structure", {
+    fileKey: "session-1",
+    nodeId: "1:1",
+    outputPath: "out/structure.json",
+    chunkSize: 1,
+  }, cwd) as { nodeCount: number; chunkCount: number; bytesWritten: number };
+  assert.equal(saved.nodeCount, 2);
+  assert.equal(saved.chunkCount, 2);
+  assert.ok(saved.bytesWritten > 0);
+  assert.equal(chunkRequests.length, 2);
+  const structure = JSON.parse(await readFile(path.join(cwd, "out/structure.json"), "utf8"));
+  assert.equal(structure.children[0].id, "1:2");
+  await assert.rejects(hub.call("save_node_structure", {
+    fileKey: "session-1",
+    nodeId: "1:1",
+    outputPath: "out/structure.json",
+    chunkSize: 1,
+  }, cwd), /EEXIST/);
+
+  socket.close();
+  await hub.close();
+});
+
+test("keeps gateway reads responsive between large-structure chunks", async () => {
+  const port = await freePort();
+  const hub = new GatewayHub(port, "shared-secret", silentAudit);
+  assert.equal(await hub.start(), true);
+  const socket = await connectedPlugin(port, "shared-secret");
+  socket.on("message", (data) => {
+    const request = JSON.parse(data.toString());
+    setTimeout(() => socket.send(JSON.stringify({
+      type: "response",
+      id: request.id,
+      ok: true,
+      result: {
+        rootNodeId: "1:1",
+        nodes: [{
+          node: { id: "1:1", name: "Page", type: "PAGE" },
+          parentNodeId: null,
+          childNodeIds: [],
+        }],
+        cursor: [],
+        done: true,
+      },
+    })), 50);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const cwd = await mkdtemp(path.join(tmpdir(), "figma-gateway-responsive-"));
+  const saving = hub.call("save_node_structure", {
+    fileKey: "session-1", nodeId: "1:1", outputPath: "structure.json", chunkSize: 1,
+  }, cwd);
+  assert.equal((await hub.call("list_files", {}) as Array<{ fileKey: string }>)[0]?.fileKey, "session-1");
+  await saving;
+
+  socket.close();
+  await hub.close();
+});
+
 test("routes typed Plugin API operations and requires confirmation for calls and writes", async () => {
   const port = await freePort();
   const hub = new GatewayHub(port, "shared-secret", silentAudit);
