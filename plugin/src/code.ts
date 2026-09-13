@@ -7,7 +7,7 @@ declare const __GATEWAY_INSTANCE__: string;
 type IncomingRequest = {
   type: "request";
   id: string;
-  operation: "get_node" | "export" | "execute" | "api";
+  operation: "get_node" | "get_node_chunk" | "export" | "execute" | "api";
   payload: Record<string, unknown>;
 };
 
@@ -41,6 +41,51 @@ async function getNode(payload: Record<string, unknown>) {
   if (!node) throw new Error(`Node not found: ${nodeId}`);
   const requestedDepth = payload.depth === undefined ? Number.POSITIVE_INFINITY : Number(payload.depth);
   return serializeNode(node, Number.isFinite(requestedDepth) ? Math.max(0, requestedDepth) : Number.POSITIVE_INFINITY);
+}
+
+type NodeCursorItem = { nodeId: string; parentNodeId: string | null };
+
+async function getNodeChunk(payload: Record<string, unknown>) {
+  const rootNodeId = String(payload.nodeId || "");
+  if (!rootNodeId) throw new Error("nodeId is required");
+  const requestedSize = Number(payload.chunkSize || 200);
+  if (!Number.isInteger(requestedSize) || requestedSize < 1 || requestedSize > 1000) {
+    throw new Error("chunkSize must be an integer from 1 to 1000");
+  }
+  const rawCursor = payload.cursor;
+  const stack: NodeCursorItem[] = Array.isArray(rawCursor)
+    ? rawCursor.map((item) => ({
+        nodeId: String((item as Record<string, unknown>).nodeId || ""),
+        parentNodeId: (item as Record<string, unknown>).parentNodeId == null
+          ? null
+          : String((item as Record<string, unknown>).parentNodeId),
+      }))
+    : [{ nodeId: rootNodeId, parentNodeId: null }];
+  if (stack.some((item) => !item.nodeId)) throw new Error("cursor contains an empty nodeId");
+
+  const nodes: Array<{
+    node: Record<string, unknown>;
+    parentNodeId: string | null;
+    childNodeIds: string[];
+  }> = [];
+  while (stack.length > 0 && nodes.length < requestedSize) {
+    const current = stack.pop()!;
+    const node = await figma.getNodeByIdAsync(current.nodeId);
+    if (!node) throw new Error(`Node not found while reading chunk: ${current.nodeId}`);
+    const children = "children" in node ? [...(node as ChildrenMixin).children] : [];
+    nodes.push({
+      node: serializeNode(node, 0),
+      parentNodeId: current.parentNodeId,
+      childNodeIds: children.map((child) => child.id),
+    });
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push({ nodeId: children[index]!.id, parentNodeId: node.id });
+    }
+    if (nodes.length % 25 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return { rootNodeId, nodes, cursor: stack, done: stack.length === 0 };
 }
 
 type VideoExportSettings = ExportSettingsMP4 | ExportSettingsGIF | ExportSettingsWEBM;
@@ -130,6 +175,7 @@ figma.ui.onmessage = async (message: IncomingRequest) => {
   try {
     let result: unknown;
     if (message.operation === "get_node") result = await getNode(message.payload);
+    else if (message.operation === "get_node_chunk") result = await getNodeChunk(message.payload);
     else if (message.operation === "export") result = await exportNode(message.payload);
     else if (message.operation === "execute") result = await execute(message.payload);
     else if (message.operation === "api") {

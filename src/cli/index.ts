@@ -10,7 +10,13 @@ import { buildLocalPlugin } from "./plugin-build.js";
 import { ensureGatewaySecret } from "./secret-store.js";
 import { GatewayHub } from "../server/gateway.js";
 import { credentialStatus, figmaRestRequest, type RestRequest } from "../server/rest.js";
-import { focusFigmaWindow, listFigmaWindows } from "./windows.js";
+import {
+  cleanupManagedFigmaWindow,
+  focusFigmaWindow,
+  listFigmaWindows,
+  openManagedFigmaWindow,
+  setManagedFigmaWindowMode,
+} from "./windows.js";
 import {
   listPluginApiEntries,
   pluginApiEntry,
@@ -38,9 +44,12 @@ Usage:
   figma-gateway [global options] plugin build
   figma-gateway [global options] plugin windows
   figma-gateway [global options] plugin focus <file-name>
+  figma-gateway [global options] plugin connect --url FIGMA_URL --mode design|dev [--file-name FILE_NAME] [--window new]
+  figma-gateway [global options] plugin cleanup <operation-id> --confirm
   figma-gateway [global options] plugin start [--url FIGMA_URL] [--window FILE_NAME] [--mode auto|design|dev|figjam|slides|buzz|motion] [--reload]
   figma-gateway [global options] plugin files [--editor-type TYPE]
   figma-gateway [global options] plugin node <session-key> <node-id> [--depth N]
+  figma-gateway [global options] plugin structure <session-key> <node-id> <output> [--chunk-size N]
   figma-gateway [global options] plugin api list [--interface NAME] [--search TEXT]
   figma-gateway [global options] plugin api describe <api-id>
   figma-gateway [global options] plugin api <api-id> <session-key> [--params JSON|@FILE] [--target JSON|@FILE] [--value JSON|@FILE] [--key KEY] [--overload N] [--confirm]
@@ -50,6 +59,7 @@ Usage:
   figma-gateway [global options] plugin exec <session-key> (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin exec-many <session-key>... (--code JS | --code-file PATH) [--args JSON] --confirm
   figma-gateway [global options] plugin export <session-key> <node-id> <output> [--format PNG|JPG|SVG|PDF|MP4|GIF|WEBM] [--scale N] [--fps N] [--quality LEVEL] [--loop-count N]
+  figma-gateway [global options] plugin export-batch <session-key> --request JSON|@FILE
   figma-gateway [global options] rest <METHOD> <PATH> [--query JSON] [--body JSON|@FILE] [--save PATH] [--confirm]
   figma-gateway [global options] auth status
   figma-gateway [global options] auth store <oauth|pat|plan>
@@ -94,7 +104,7 @@ function parse(argv: string[]): Parsed {
       positionals.push(value);
       continue;
     }
-    if (["--confirm", "--reload", "--keep"].includes(value)) {
+    if (["--confirm", "--reload", "--keep", "--restore-state"].includes(value)) {
       options.set(value, true);
       continue;
     }
@@ -192,6 +202,99 @@ async function runPlugin(
     const fileName = parsed.positionals.join(" ");
     focusFigmaWindow(profile.app, fileName, spawn);
     return output(writer, { ok: true, app: profile.app, window: fileName });
+  }
+  if (action === "cleanup") {
+    if (platform !== "darwin") throw new Error("Figma window cleanup is supported on macOS only");
+    if (!parsed.options.has("--confirm")) throw new Error("plugin cleanup requires --confirm");
+    const operationId = parsed.positionals[0];
+    if (!operationId) throw new Error("plugin cleanup requires an operation ID");
+    const operation = cleanupManagedFigmaWindow(operationId, spawn);
+    return output(writer, {
+      ok: true,
+      operationId,
+      closedWindow: operation.window,
+    });
+  }
+  if (action === "connect") {
+    if (platform !== "darwin") {
+      throw new Error("Managed Figma window connections are supported on macOS only");
+    }
+    const urlValue = parsed.options.get("--url");
+    if (typeof urlValue !== "string") throw new Error("plugin connect requires --url");
+    const url = new URL(urlValue);
+    if (url.protocol !== "https:" || !["figma.com", "www.figma.com"].includes(url.hostname)) {
+      throw new Error("--url must be an https://figma.com URL");
+    }
+    const mode = String(parsed.options.get("--mode") || "");
+    if (mode !== "design" && mode !== "dev") {
+      throw new Error("plugin connect --mode must be design or dev");
+    }
+    const windowPolicy = String(parsed.options.get("--window") || "new");
+    if (windowPolicy !== "new") throw new Error("plugin connect currently supports only --window new");
+    const fileNameValue = parsed.options.get("--file-name");
+    const targetFileName = typeof fileNameValue === "string"
+      ? fileNameValue
+      : decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "").replaceAll("-", " ");
+    if (!targetFileName) throw new Error("Could not derive the Figma file name from --url");
+    const operation = openManagedFigmaWindow(profile.app, url.href, targetFileName, spawn);
+    try {
+      setManagedFigmaWindowMode(operation, mode, spawn);
+      const root = fileURLToPath(new URL("../../", import.meta.url));
+      const [x, y] = operation.window.position;
+      const [width, height] = operation.window.size;
+      const result = spawn("bash", [path.join(root, "scripts", "start-plugin.sh")], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          FIGMA_CONFIG_FILE: "/dev/null",
+          FIGMA_VARIANT: profile.name,
+          FIGMA_APP: profile.app,
+          FIGMA_APP_BUNDLE_ID: "com.figma.Desktop",
+          FIGMA_VARIANT_BRIDGE_PORT: String(profile.port),
+          FIGMA_BRIDGE_PORT: String(profile.port),
+          FIGMA_GATEWAY_PORT: String(profile.port),
+          FIGMA_GATEWAY_SECRET: requireSecret(profile),
+          FIGMA_TOKEN_KIND: profile.tokenKind,
+          FIGMA_TOKEN_KEYCHAIN_ITEM: profile.tokenService,
+          FIGMA_TARGET_INSTANCE: "shared",
+          FIGMA_TARGET_FILE_NAME: targetFileName,
+          FIGMA_TARGET_EDITOR_TYPE: mode === "dev" ? "dev" : "figma",
+          FIGMA_TARGET_WINDOW_X: String(x),
+          FIGMA_TARGET_WINDOW_Y: String(y),
+          FIGMA_TARGET_WINDOW_WIDTH: String(width),
+          FIGMA_TARGET_WINDOW_HEIGHT: String(height),
+          FIGMA_REQUIRE_NEW_SESSION: "1",
+          FIGMA_RESTORE_STATE: "1",
+        },
+        encoding: "utf8",
+      });
+      if (result.status !== 0) throw new Error((result.stderr || result.stdout || "Plugin start failed").trim());
+      const sessionKey = result.stdout.match(/^SESSION_KEY=(.+)$/m)?.[1]?.trim();
+      if (!sessionKey) throw new Error("Plugin connected without returning its session key");
+      const health = publicPluginHealth(await pluginHealth(profile)) as {
+        files?: Array<{ fileKey?: string; fileName?: string; editorType?: string; editorMode?: string }>;
+      };
+      const connected = (health.files || []).find((file) => file.fileKey === sessionKey);
+      if (!connected || connected.fileName !== targetFileName || connected.editorType !== (mode === "dev" ? "dev" : "figma")) {
+        throw new Error("The new Plugin session does not match the managed Figma window");
+      }
+      return output(writer, {
+        ok: true,
+        operationId: operation.operationId,
+        sessionKey,
+        window: operation.window,
+        createdWindow: true,
+        requestedMode: mode,
+        editorType: connected.editorType,
+        editorMode: connected.editorMode,
+        focusRestored: true,
+      });
+    } catch (error) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `The managed window was left open; close it with: figma-gateway plugin cleanup ${operation.operationId} --confirm`,
+      );
+    }
   }
   if (action === "start") {
     if (platform !== "darwin") {
@@ -419,6 +522,23 @@ async function runPlugin(
       ...(depth !== undefined ? { depth } : {}),
     }));
   }
+  if (action === "structure") {
+    const [nodeId, outputPath] = parsed.positionals.slice(1);
+    if (!nodeId || !outputPath) {
+      throw new Error("plugin structure requires node ID and output path");
+    }
+    const chunkSizeValue = parsed.options.get("--chunk-size");
+    const chunkSize = typeof chunkSizeValue === "string" ? Number(chunkSizeValue) : 200;
+    if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > 1000) {
+      throw new Error("--chunk-size must be an integer from 1 to 1000");
+    }
+    return output(writer, await pluginRpc(profile, "save_node_structure", {
+      fileKey,
+      nodeId,
+      outputPath,
+      chunkSize,
+    }));
+  }
   if (action === "exec") {
     if (!parsed.options.has("--confirm")) throw new Error("plugin exec requires --confirm");
     const codeValue = parsed.options.get("--code");
@@ -494,6 +614,16 @@ async function runPlugin(
         ...(quality !== undefined ? { quality } : {}),
         ...(loopCount !== undefined ? { loopCount } : {}),
       }],
+    }));
+  }
+  if (action === "export-batch") {
+    const request = await jsonArgument(parsed.options.get("--request"), "--request");
+    if (!request || typeof request !== "object" || !Array.isArray((request as { items?: unknown }).items)) {
+      throw new Error("--request must contain an items array");
+    }
+    return output(writer, await pluginRpc(profile, "save_screenshots", {
+      ...(request as Record<string, unknown>),
+      fileKey,
     }));
   }
   throw new Error(`Unknown plugin command: ${action || ""}`);

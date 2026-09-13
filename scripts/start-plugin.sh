@@ -74,6 +74,23 @@ new_plugin_alive() {
   return 1
 }
 
+matching_plugin_session() {
+  plugin_sessions | head -1
+}
+
+new_plugin_session() {
+  local current key
+  current="$(plugin_sessions || true)"
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    if ! grep -Fqx -- "$key" <<<"$INITIAL_SESSIONS"; then
+      printf '%s\n' "$key"
+      return 0
+    fi
+  done <<<"$current"
+  return 1
+}
+
 if [[ "${1:-}" == "--check" ]]; then
   if plugin_alive; then echo "running"; exit 0; else echo "stopped"; exit 1; fi
 fi
@@ -123,22 +140,93 @@ fi
 PID="$(pgrep -f "^${APP}/Contents/MacOS/" | head -1)"
 [[ -n "$PID" ]] || { echo "ERROR: Figma is not running" >&2; exit 1; }
 
+ORIGINAL_FRONTMOST_PID=""
+ORIGINAL_FIGMA_MAIN_WINDOW=""
+ORIGINAL_FIGMA_VISIBLE=""
+if [[ "${FIGMA_RESTORE_STATE:-0}" == "1" ]]; then
+  ORIGINAL_FRONTMOST_PID="$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>/dev/null || true)"
+  ORIGINAL_FIGMA_VISIBLE="$(osascript - "$PID" <<'APPLESCRIPT' 2>/dev/null || true
+on run argv
+  set figmaPid to item 1 of argv as integer
+  tell application "System Events" to return visible of (first process whose unix id is figmaPid)
+end run
+APPLESCRIPT
+)"
+  ORIGINAL_FIGMA_MAIN_WINDOW="$(osascript - "$PID" <<'APPLESCRIPT' 2>/dev/null || true
+on run argv
+  set targetPid to item 1 of argv as integer
+  tell application "System Events" to tell (first process whose unix id is targetPid)
+    try
+      return name of first window whose value of attribute "AXMain" is true
+    end try
+  end tell
+  return ""
+end run
+APPLESCRIPT
+)"
+fi
+
+restore_focus() {
+  [[ "${FIGMA_RESTORE_STATE:-0}" == "1" ]] || return 0
+  [[ -n "$ORIGINAL_FRONTMOST_PID" ]] || return 0
+  osascript - "$ORIGINAL_FRONTMOST_PID" "$PID" "$ORIGINAL_FIGMA_MAIN_WINDOW" "${ORIGINAL_FIGMA_VISIBLE:-true}" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  set originalPid to item 1 of argv as integer
+  set figmaPid to item 2 of argv as integer
+  set originalWindowName to item 3 of argv
+  set originalVisible to (item 4 of argv is "true")
+  tell application "System Events"
+    if originalPid is figmaPid and originalWindowName is not "" then
+      tell (first process whose unix id is figmaPid)
+        repeat with candidate in every window
+          if (name of candidate as text) is originalWindowName then
+            perform action "AXRaise" of candidate
+            set value of attribute "AXMain" of candidate to true
+            set value of attribute "AXFocused" of candidate to true
+            set frontmost to true
+            return
+          end if
+        end repeat
+      end tell
+    else
+      try
+        set frontmost of (first application process whose unix id is originalPid) to true
+      end try
+    end if
+    try
+      set visible of (first application process whose unix id is figmaPid) to originalVisible
+    end try
+  end tell
+end run
+APPLESCRIPT
+}
+
 click_menu_item() {
-  osascript -e "tell application id \"$BUNDLE_ID\" to activate" >/dev/null
-  osascript - "$PID" "${FIGMA_TARGET_FILE_NAME:-}" "$1" "$MENU_DEVELOPMENT" "$MENU_PLUGINS" \
+  local status=0
+  osascript - "$PID" "${FIGMA_TARGET_FILE_NAME:-}" "$1" \
+    "${FIGMA_TARGET_WINDOW_X:-}" "${FIGMA_TARGET_WINDOW_Y:-}" \
+    "${FIGMA_TARGET_WINDOW_WIDTH:-}" "${FIGMA_TARGET_WINDOW_HEIGHT:-}" \
     > /dev/null 2>"${TMPDIR:-/tmp}/figma-gateway-menu.err" <<'APPLESCRIPT'
 on run argv
   set targetPid to item 1 of argv as integer
   set targetName to item 2 of argv
   set pluginName to item 3 of argv
-  set developmentMenu to item 4 of argv
-  set pluginsMenu to item 5 of argv
+  set targetX to item 4 of argv
+  set targetY to item 5 of argv
+  set targetWidth to item 6 of argv
+  set targetHeight to item 7 of argv
   set foundTarget to targetName is ""
   delay 0.6
   tell application "System Events" to tell (first process whose unix id is targetPid)
     if targetName is not "" then
       repeat with candidate in every window
-        if (name of candidate as text) is targetName then
+        set signatureMatches to true
+        if targetX is not "" then
+          set {candidateX, candidateY} to position of candidate
+          set {candidateWidth, candidateHeight} to size of candidate
+          set signatureMatches to candidateX is (targetX as integer) and candidateY is (targetY as integer) and candidateWidth is (targetWidth as integer) and candidateHeight is (targetHeight as integer)
+        end if
+        if (name of candidate as text) is targetName and signatureMatches then
           perform action "AXRaise" of candidate
           set value of attribute "AXMain" of candidate to true
           set value of attribute "AXFocused" of candidate to true
@@ -149,10 +237,26 @@ on run argv
       end repeat
     end if
     if foundTarget is false then error "target Figma window not found: " & targetName
-    click menu item pluginName of menu 1 of menu item developmentMenu of menu 1 of menu bar item pluginsMenu of menu bar 1
+    set pluginItem to missing value
+    -- Figma's Plugins menu is the sixth application menu on macOS in every
+    -- locale. Try it first so unrelated menus such as Recent Items are never
+    -- expanded during the normal path.
+    set pluginsMenu to menu bar item 6 of menu bar 1
+    repeat with parentItem in menu items of menu 1 of pluginsMenu
+      try
+        set candidateItem to menu item pluginName of menu 1 of parentItem
+        if exists candidateItem then set pluginItem to candidateItem
+      end try
+      if pluginItem is not missing value then exit repeat
+    end repeat
+    if pluginItem is missing value then error "development Plugin menu item not found: " & pluginName
+    perform action "AXPress" of pluginItem
   end tell
 end run
 APPLESCRIPT
+  status=$?
+  restore_focus
+  return "$status"
 }
 
 if [[ $RELOAD -eq 1 ]]; then
@@ -168,6 +272,12 @@ for attempt in $(seq 1 12); do
       if { [[ "${FIGMA_REQUIRE_NEW_SESSION:-0}" == "1" ]] && new_plugin_alive; } || \
          { [[ "${FIGMA_REQUIRE_NEW_SESSION:-0}" != "1" ]] && plugin_alive; }; then
         echo "==> Plugin connected (attempt $attempt)"
+        if [[ "${FIGMA_REQUIRE_NEW_SESSION:-0}" == "1" ]]; then
+          SESSION_KEY="$(new_plugin_session || true)"
+        else
+          SESSION_KEY="$(matching_plugin_session || true)"
+        fi
+        [[ -z "$SESSION_KEY" ]] || echo "SESSION_KEY=$SESSION_KEY"
         exit 0
       fi
       sleep 1

@@ -25,7 +25,7 @@ export interface PluginConnected {
 export interface PluginRequest {
   type: "request";
   id: string;
-  operation: "get_node" | "export" | "execute" | "api";
+  operation: "get_node" | "get_node_chunk" | "export" | "execute" | "api";
   payload: Record<string, unknown>;
 }
 
@@ -52,6 +52,7 @@ export interface RpcResponse {
 export const PLUGIN_TOOLS = new Set([
   "list_files",
   "get_node",
+  "save_node_structure",
   "save_screenshots",
   "execute_plugin_code",
   "plugin_api_get",
