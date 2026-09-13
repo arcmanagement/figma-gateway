@@ -4,9 +4,9 @@
 cask "figma-gateway" do
   arch arm: "arm64", intel: "x64"
 
-  version "1.2.0"
-  sha256 arm:   "5ea40f3917926aebc3e473d75d6da89dccca7e1d3c9da2bd83dbd05f0596c708",
-         intel: "0bd7c26000615bade5a3ed26505fcffecd66deb5f5f2b5685007af3fb770f6e2"
+  version "1.3.0"
+  sha256 arm:   "5c12a53f862022028f2f18b41c8981d6c7e79053cd7989a2410bd3ec1daf0600",
+         intel: "bd294facc5c2c4d937fc0bb86477a03f45f9c7e280d11eecdaa9878e56104cb7"
 
   url "https://github.com/arcmanagement/figma-gateway/releases/download/v#{version}/figma-gateway-#{version}-macos-#{arch}.zip"
   name "Figma Gateway"
